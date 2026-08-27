@@ -188,6 +188,36 @@ func TestGoogleDeviceAuthRejectsNonDeveloper(t *testing.T) {
 	}
 }
 
+func TestInstallersCoverWindowsAndUnix(t *testing.T) {
+	environment := newTestEnvironment(t, 1<<20)
+	defer environment.close()
+
+	tests := []struct {
+		path     string
+		expected []string
+	}{
+		{"/install.sh", []string{"mingw*|msys*|cygwin*|windows_nt", "os=windows; suffix=.exe", "pageup-$os-$arch$suffix", "$HOME/bin/pageup.exe"}},
+		{"/install.ps1", []string{"pageup-windows-$Arch.exe", "Programs\\pageup", "pageup auth login"}},
+		{"/", []string{"macOS / Linux", "Windows PowerShell", "/install.ps1 | iex", "data-platform=\"windows\""}},
+	}
+	for _, test := range tests {
+		response, err := http.Get(environment.server.URL + test.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, readErr := io.ReadAll(response.Body)
+		response.Body.Close()
+		if readErr != nil || response.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s = %d, %v", test.path, response.StatusCode, readErr)
+		}
+		for _, expected := range test.expected {
+			if !strings.Contains(string(body), expected) {
+				t.Errorf("GET %s missing %q", test.path, expected)
+			}
+		}
+	}
+}
+
 func mustPrivateKey(t *testing.T) ed25519.PrivateKey {
 	t.Helper()
 	_, privateKey, err := ed25519.GenerateKey(rand.Reader)

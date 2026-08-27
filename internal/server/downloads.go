@@ -50,9 +50,11 @@ set -eu
 base_url='` + shellSingleQuote(baseURL) + `'
 os=$(uname -s | tr '[:upper:]' '[:lower:]')
 arch=$(uname -m)
+suffix=
 
 case "$os" in
   linux|darwin) ;;
+  mingw*|msys*|cygwin*|windows_nt) os=windows; suffix=.exe ;;
   *) echo "pageup: unsupported operating system: $os" >&2; exit 1 ;;
 esac
 
@@ -62,7 +64,10 @@ case "$arch" in
   *) echo "pageup: unsupported architecture: $arch" >&2; exit 1 ;;
 esac
 
-if [ -w /usr/local/bin ]; then
+if [ "$os" = windows ]; then
+  destination="$HOME/bin/pageup.exe"
+  mkdir -p "$HOME/bin"
+elif [ -w /usr/local/bin ]; then
   destination=/usr/local/bin/pageup
 else
   destination="$HOME/.local/bin/pageup"
@@ -71,7 +76,7 @@ fi
 
 temporary=$(mktemp)
 trap 'rm -f "$temporary"' EXIT INT TERM
-curl -fsSL "$base_url/downloads/pageup-$os-$arch" -o "$temporary"
+curl -fsSL "$base_url/downloads/pageup-$os-$arch$suffix" -o "$temporary"
 chmod 0755 "$temporary"
 mv "$temporary" "$destination"
 trap - EXIT INT TERM

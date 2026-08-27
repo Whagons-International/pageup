@@ -631,13 +631,27 @@ const landingHTML = `<!doctype html>
   h1 { font-size: clamp(2.8rem, 10vw, 6rem); letter-spacing: -.08em; margin: 0 0 1rem; }
   p { color: #a9a49a; line-height: 1.65; }
   code { display: block; overflow-x: auto; padding: 1rem; border: 1px solid #34322e; background: #151616; color: #b9f5a8; }
+  .installers { display: grid; gap: .75rem; }
+  .installer { opacity: .62; }
+  .installer.detected { opacity: 1; }
+  .installer strong { display: block; margin-bottom: .4rem; color: #ede7d9; font-size: .8rem; text-transform: uppercase; letter-spacing: .08em; }
   .dot { color: #f7a65a; }
 </style>
 <main>
   <h1>pageup<span class="dot">.</span></h1>
   <p>Shareable, unlisted HTML pages for the Whagons team.</p>
-  <code>curl -fsSL {{.URL}}/install.sh | sh<br>pageup auth login</code>
+  <div class="installers">
+    <div class="installer" data-platform="unix"><strong>macOS / Linux</strong><code>curl -fsSL {{.URL}}/install.sh | sh<br>pageup auth login</code></div>
+    <div class="installer" data-platform="windows"><strong>Windows PowerShell</strong><code>irm {{.URL}}/install.ps1 | iex<br>pageup auth login</code></div>
+  </div>
 </main>
+<script>
+  const platform = navigator.userAgentData?.platform || navigator.platform || navigator.userAgent;
+  const detected = /windows/i.test(platform) ? 'windows' : 'unix';
+  const installer = document.querySelector('[data-platform="' + detected + '"]');
+  installer?.classList.add('detected');
+  installer?.parentElement?.prepend(installer);
+</script>
 </html>`
 
 func (server *Server) handleLanding(writer http.ResponseWriter) {
