@@ -35,6 +35,18 @@ func main() {
 		MaxPageBytes:  maxPageBytes,
 		Version:       version,
 		Logger:        logger,
+		Authorizer: pageupserver.NewWhagonsDeveloperAuthorizer(
+			envOr("PAGEUP_WHAGONS_AUTH_URL", "https://gonvex.whagons.com/api/internal/pageup/authorize"),
+			envOr("PAGEUP_WHAGONS_PROJECT_ID", "whagons-5"),
+		),
+		S3: pageupserver.S3Config{
+			Endpoint:        os.Getenv("PAGEUP_S3_ENDPOINT"),
+			Region:          envOr("PAGEUP_S3_REGION", "us-east-1"),
+			Bucket:          os.Getenv("PAGEUP_S3_BUCKET"),
+			AccessKeyID:     os.Getenv("PAGEUP_S3_ACCESS_KEY_ID"),
+			SecretAccessKey: os.Getenv("PAGEUP_S3_SECRET_ACCESS_KEY"),
+			Prefix:          os.Getenv("PAGEUP_S3_PREFIX"),
+		},
 	})
 	if err != nil {
 		logger.Error("initialize server", "error", err)

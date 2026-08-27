@@ -21,7 +21,7 @@ func TestInstallAndReplaceEmbeddedSkill(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(skill), "name: pages") || !strings.Contains(string(skill), "pageup doctor") {
+	if !strings.Contains(string(skill), "name: pages") || !strings.Contains(string(skill), "pageup auth login") || !strings.Contains(string(skill), "https://pageup.whagons.com/install.sh") {
 		t.Fatal("installed skill is missing expected Pages instructions")
 	}
 	metadata, err := os.ReadFile(filepath.Join(destination, "agents", "openai.yaml"))

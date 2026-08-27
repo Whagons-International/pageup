@@ -6,6 +6,27 @@ type ErrorResponse struct {
 	Error string `json:"error"`
 }
 
+type DeviceAuthStartRequest struct {
+	Name      string `json:"name"`
+	PublicKey string `json:"public_key"`
+}
+
+type DeviceAuthStartResponse struct {
+	ID              string    `json:"id"`
+	VerificationURL string    `json:"verification_url"`
+	ExpiresAt       time.Time `json:"expires_at"`
+	IntervalSeconds int       `json:"interval_seconds"`
+}
+
+type DeviceAuthStatusResponse struct {
+	Status string `json:"status"`
+	Email  string `json:"email,omitempty"`
+}
+
+type DeviceAuthCompleteRequest struct {
+	IDToken string `json:"id_token"`
+}
+
 type UploadResponse struct {
 	ID       string `json:"id"`
 	URL      string `json:"url"`

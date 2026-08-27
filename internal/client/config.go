@@ -14,7 +14,7 @@ import (
 	"github.com/desarso/pageup/internal/protocol"
 )
 
-const DefaultEndpoint = "https://pages.gabrielmalek.com"
+const DefaultEndpoint = "https://pageup.whagons.com"
 
 type Config struct {
 	Version    int    `json:"version"`
@@ -66,7 +66,7 @@ func LoadConfig(path string) (Config, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			privateKeyValue := strings.TrimSpace(os.Getenv("PAGEUP_PRIVATE_KEY"))
 			if privateKeyValue == "" {
-				return Config{}, fmt.Errorf("no pageup credentials at %s; run 'pageup init'", path)
+				return Config{}, fmt.Errorf("no pageup credentials at %s; run 'pageup auth login'", path)
 			}
 			privateKey, decodeErr := protocol.DecodePrivateKey(privateKeyValue)
 			if decodeErr != nil {

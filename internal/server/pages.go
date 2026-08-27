@@ -36,23 +36,19 @@ func (server *Server) createPage(id string, key api.Key, kind pageKind, body []b
 	server.pages.Lock()
 	defer server.pages.Unlock()
 
-	metadataPath := server.pageMetadataPath(id)
+	metadataKey := server.pageMetadataKey(id)
 	existingKind, _, existing, err := server.readPageContent(id)
 	if err == nil {
-		if existingKind != kind || !bytes.Equal(existing, body) {
+		if existingKind != kind || !bytes.Equal(existing.Body, body) {
 			return false, pageMetadata{}, errContentConflict
 		}
-		metadata, err := readPageMetadata(metadataPath, id)
+		metadata, err := readPageMetadataFromStore(server.store, metadataKey, id)
 		if errors.Is(err, os.ErrNotExist) {
 			if key.Role != RoleAdmin {
 				return false, pageMetadata{}, errContentConflict
 			}
-			info, statErr := os.Stat(server.pageContentPath(id, kind))
-			if statErr != nil {
-				return false, pageMetadata{}, statErr
-			}
-			metadata = newPageMetadata(id, key.ID, info.ModTime())
-			if err := writePageMetadata(metadataPath, metadata); err != nil {
+			metadata = newPageMetadata(id, key.ID, existing.LastModified)
+			if err := writePageMetadataToStore(server.store, metadataKey, metadata); err != nil {
 				return false, pageMetadata{}, err
 			}
 			return false, metadata, nil
@@ -69,8 +65,8 @@ func (server *Server) createPage(id string, key api.Key, kind pageKind, body []b
 		return false, pageMetadata{}, err
 	}
 
-	contentPath := server.pageContentPath(id, kind)
-	created, err := writeImmutable(contentPath, body)
+	contentKey := server.pageContentKey(id, kind)
+	created, err := server.store.Put(contentKey, body, true)
 	if err != nil {
 		return false, pageMetadata{}, err
 	}
@@ -79,8 +75,8 @@ func (server *Server) createPage(id string, key api.Key, kind pageKind, body []b
 	}
 
 	metadata := newPageMetadata(id, key.ID, server.config.Now())
-	if err := writePageMetadata(metadataPath, metadata); err != nil {
-		if removeErr := os.Remove(contentPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+	if err := writePageMetadataToStore(server.store, metadataKey, metadata); err != nil {
+		if removeErr := server.store.Delete(contentKey); removeErr != nil {
 			return false, pageMetadata{}, fmt.Errorf("write metadata: %w (remove incomplete page: %v)", err, removeErr)
 		}
 		return false, pageMetadata{}, fmt.Errorf("write metadata: %w", err)
@@ -92,33 +88,29 @@ func (server *Server) updatePage(id string, key api.Key, kind pageKind, body []b
 	server.pages.Lock()
 	defer server.pages.Unlock()
 
-	existingKind, existingPath, existing, err := server.readPageContent(id)
+	existingKind, existingKey, existing, err := server.readPageContent(id)
 	if err != nil {
 		return false, pageMetadata{}, err
 	}
-	metadataPath := server.pageMetadataPath(id)
+	metadataKey := server.pageMetadataKey(id)
 
 	metadataMissing := false
-	metadata, err := readPageMetadata(metadataPath, id)
+	metadata, err := readPageMetadataFromStore(server.store, metadataKey, id)
 	if errors.Is(err, os.ErrNotExist) {
 		if key.Role != RoleAdmin {
 			return false, pageMetadata{}, errPageForbidden
 		}
 		metadataMissing = true
-		info, statErr := os.Stat(existingPath)
-		if statErr != nil {
-			return false, pageMetadata{}, statErr
-		}
-		metadata = newPageMetadata(id, key.ID, info.ModTime())
+		metadata = newPageMetadata(id, key.ID, existing.LastModified)
 	} else if err != nil {
 		return false, pageMetadata{}, err
 	} else if metadata.OwnerKeyID != key.ID && key.Role != RoleAdmin {
 		return false, pageMetadata{}, errPageForbidden
 	}
 
-	if existingKind == kind && bytes.Equal(existing, body) {
+	if existingKind == kind && bytes.Equal(existing.Body, body) {
 		if metadataMissing {
-			if err := writePageMetadata(metadataPath, metadata); err != nil {
+			if err := writePageMetadataToStore(server.store, metadataKey, metadata); err != nil {
 				return false, pageMetadata{}, err
 			}
 		}
@@ -128,27 +120,27 @@ func (server *Server) updatePage(id string, key api.Key, kind pageKind, body []b
 	updated := metadata
 	updated.Revision++
 	updated.UpdatedAt = server.config.Now().UTC()
-	targetPath := server.pageContentPath(id, kind)
+	targetKey := server.pageContentKey(id, kind)
 	if existingKind != kind {
-		if _, err := os.Stat(targetPath); err == nil {
+		if _, err := server.store.Get(targetKey); err == nil {
 			return false, pageMetadata{}, errors.New("page has conflicting stored content")
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return false, pageMetadata{}, err
 		}
 	}
-	if err := writeAtomicFile(targetPath, body, 0o600); err != nil {
+	if _, err := server.store.Put(targetKey, body, false); err != nil {
 		return false, pageMetadata{}, err
 	}
 	if existingKind != kind {
-		if err := os.Remove(existingPath); err != nil {
-			os.Remove(targetPath)
+		if err := server.store.Delete(existingKey); err != nil {
+			server.store.Delete(targetKey)
 			return false, pageMetadata{}, err
 		}
 	}
-	if err := writePageMetadata(metadataPath, updated); err != nil {
-		rollbackErr := writeAtomicFile(existingPath, existing, 0o600)
+	if err := writePageMetadataToStore(server.store, metadataKey, updated); err != nil {
+		_, rollbackErr := server.store.Put(existingKey, existing.Body, false)
 		if existingKind != kind {
-			if removeErr := os.Remove(targetPath); rollbackErr == nil && removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			if removeErr := server.store.Delete(targetKey); rollbackErr == nil && removeErr != nil {
 				rollbackErr = removeErr
 			}
 		}
@@ -160,39 +152,39 @@ func (server *Server) updatePage(id string, key api.Key, kind pageKind, body []b
 	return true, updated, nil
 }
 
-func (server *Server) pageContentPath(id string, kind pageKind) string {
+func (server *Server) pageContentKey(id string, kind pageKind) string {
 	extension := ".html"
 	if kind == pageKindSite {
 		extension = ".site.zip"
 	}
-	return filepath.Join(server.config.DataDir, "pages", id+extension)
+	return "pages/" + id + extension
 }
 
-func (server *Server) pageMetadataPath(id string) string {
-	return filepath.Join(server.config.DataDir, "pages", id+".json")
+func (server *Server) pageMetadataKey(id string) string {
+	return "pages/" + id + ".json"
 }
 
-func (server *Server) readPageContent(id string) (pageKind, string, []byte, error) {
-	htmlPath := server.pageContentPath(id, pageKindHTML)
-	sitePath := server.pageContentPath(id, pageKindSite)
-	html, htmlErr := os.ReadFile(htmlPath)
-	site, siteErr := os.ReadFile(sitePath)
+func (server *Server) readPageContent(id string) (pageKind, string, storedObject, error) {
+	htmlKey := server.pageContentKey(id, pageKindHTML)
+	siteKey := server.pageContentKey(id, pageKindSite)
+	html, htmlErr := server.store.Get(htmlKey)
+	site, siteErr := server.store.Get(siteKey)
 	if htmlErr == nil && siteErr == nil {
-		return "", "", nil, errors.New("page has conflicting stored content")
+		return "", "", storedObject{}, errors.New("page has conflicting stored content")
 	}
 	if htmlErr == nil {
-		return pageKindHTML, htmlPath, html, nil
+		return pageKindHTML, htmlKey, html, nil
 	}
 	if siteErr == nil {
-		return pageKindSite, sitePath, site, nil
+		return pageKindSite, siteKey, site, nil
 	}
 	if !errors.Is(htmlErr, os.ErrNotExist) {
-		return "", "", nil, htmlErr
+		return "", "", storedObject{}, htmlErr
 	}
 	if !errors.Is(siteErr, os.ErrNotExist) {
-		return "", "", nil, siteErr
+		return "", "", storedObject{}, siteErr
 	}
-	return "", "", nil, os.ErrNotExist
+	return "", "", storedObject{}, os.ErrNotExist
 }
 
 func newPageMetadata(id, ownerKeyID string, createdAt time.Time) pageMetadata {
@@ -207,11 +199,23 @@ func newPageMetadata(id, ownerKeyID string, createdAt time.Time) pageMetadata {
 	}
 }
 
+func readPageMetadataFromStore(store objectStore, key, id string) (pageMetadata, error) {
+	object, err := store.Get(key)
+	if err != nil {
+		return pageMetadata{}, err
+	}
+	return parsePageMetadata(object.Body, id)
+}
+
 func readPageMetadata(path, id string) (pageMetadata, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return pageMetadata{}, err
 	}
+	return parsePageMetadata(data, id)
+}
+
+func parsePageMetadata(data []byte, id string) (pageMetadata, error) {
 	var metadata pageMetadata
 	if err := json.Unmarshal(data, &metadata); err != nil {
 		return pageMetadata{}, fmt.Errorf("parse page metadata: %w", err)
@@ -222,13 +226,14 @@ func readPageMetadata(path, id string) (pageMetadata, error) {
 	return metadata, nil
 }
 
-func writePageMetadata(path string, metadata pageMetadata) error {
+func writePageMetadataToStore(store objectStore, key string, metadata pageMetadata) error {
 	data, err := json.MarshalIndent(metadata, "", "  ")
 	if err != nil {
 		return err
 	}
 	data = append(data, '\n')
-	return writeAtomicFile(path, data, 0o600)
+	_, err = store.Put(key, data, false)
+	return err
 }
 
 func writeAtomicFile(path string, data []byte, mode os.FileMode) error {

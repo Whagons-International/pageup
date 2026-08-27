@@ -39,6 +39,8 @@ func run(args []string) error {
 		return errors.New("missing HTML file")
 	}
 	switch args[0] {
+	case "auth":
+		return runAuth(args[1:])
 	case "init":
 		return runInit(args[1:])
 	case "upload":
@@ -63,6 +65,111 @@ func run(args []string) error {
 		return nil
 	default:
 		return runUpload(args)
+	}
+}
+
+func runAuth(args []string) error {
+	if len(args) == 0 || args[0] != "login" {
+		return errors.New("usage: pageup auth login [--endpoint URL] [--name DEVICE] [--no-open] [--force]")
+	}
+	flags := flag.NewFlagSet("auth login", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	endpoint := flags.String("endpoint", client.DefaultEndpoint, "pageup server origin")
+	name := flags.String("name", defaultDeviceName(), "name for this device")
+	noOpen := flags.Bool("no-open", false, "print the sign-in URL without opening a browser")
+	force := flags.Bool("force", false, "replace credentials for another Pageup service")
+	if err := flags.Parse(args[1:]); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("auth login does not accept positional arguments")
+	}
+	path, err := client.DefaultConfigPath()
+	if err != nil {
+		return err
+	}
+
+	var config client.Config
+	if *force {
+		config, err = client.GenerateConfig(*endpoint, *name)
+		if err == nil {
+			err = client.SaveConfig(path, config, true)
+		}
+	} else {
+		config, err = client.LoadConfig(path)
+		if errors.Is(err, os.ErrNotExist) || (err != nil && strings.Contains(err.Error(), "no pageup credentials")) {
+			config, err = client.GenerateConfig(*endpoint, *name)
+			if err == nil {
+				err = client.SaveConfig(path, config, false)
+			}
+		} else if err == nil && strings.TrimRight(config.Endpoint, "/") != strings.TrimRight(*endpoint, "/") {
+			return fmt.Errorf("existing credentials belong to %s; use --force to replace them or PAGEUP_CONFIG to keep separate Pageup identities", config.Endpoint)
+		}
+	}
+	if err != nil {
+		return err
+	}
+	pageup, err := client.New(config, version)
+	if err != nil {
+		return err
+	}
+	checkCtx, cancelCheck := context.WithTimeout(context.Background(), 10*time.Second)
+	if key, checkErr := pageup.WhoAmI(checkCtx); checkErr == nil {
+		cancelCheck()
+		fmt.Printf("Already authorized as %s (%s)\n", key.Name, key.Role)
+		return nil
+	}
+	cancelCheck()
+
+	publicKey, err := config.PublicKey()
+	if err != nil {
+		return err
+	}
+	startCtx, cancelStart := context.WithTimeout(context.Background(), 20*time.Second)
+	flow, err := pageup.StartDeviceAuth(startCtx, config.Name, protocol.EncodePublicKey(publicKey))
+	cancelStart()
+	if err != nil {
+		return err
+	}
+	fmt.Println("Sign in with your Whagons developer Google account:")
+	fmt.Println(flow.VerificationURL)
+	if !*noOpen {
+		if err := openURL(flow.VerificationURL); err != nil {
+			fmt.Fprintf(os.Stderr, "pageup: could not open a browser: %v\n", err)
+		}
+	}
+	fmt.Println("Waiting for approval...")
+
+	interval := time.Duration(flow.IntervalSeconds) * time.Second
+	if interval < time.Second {
+		interval = time.Second
+	}
+	ctx, cancel := context.WithDeadline(context.Background(), flow.ExpiresAt.Add(5*time.Second))
+	defer cancel()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		status, err := pageup.DeviceAuthStatus(ctx, flow.ID)
+		if err != nil {
+			return err
+		}
+		switch status.Status {
+		case "approved":
+			fmt.Printf("Authorized %s for %s\n", config.Name, status.Email)
+			return nil
+		case "denied":
+			return errors.New("this Google account does not have Whagons developer access")
+		case "expired":
+			return errors.New("Google sign-in expired; run 'pageup auth login' again")
+		case "pending":
+		default:
+			return fmt.Errorf("unexpected authorization status %q", status.Status)
+		}
+		select {
+		case <-ctx.Done():
+			return errors.New("Google sign-in timed out; run 'pageup auth login' again")
+		case <-ticker.C:
+		}
 	}
 }
 
@@ -576,6 +683,7 @@ Usage:
   pageup <file.html|site-directory>    upload in one command
   pageup -                            upload HTML from stdin
   pageup update URL <path|->          replace a page or site at the same URL
+  pageup auth login                   authorize this device with Google
   pageup init [--endpoint URL]        create this device's key pair
   pageup keys add --name NAME PUBKEY  authorize another device
   pageup keys list                    list authorized devices

@@ -1,11 +1,36 @@
 ---
 name: pages
-description: Create, update, and publish self-contained HTML artifacts and small HTML-only sites through the authenticated Pageup CLI. Use when Codex should present project completion or progress in a polished shareable page, publish or revise a status report, handoff, demo, comparison, dashboard, or visual explanation, keep an existing Pageup URL current, or upload HTML for human review at pages.gabrielmalek.com.
+description: Create, update, and publish self-contained HTML artifacts and small HTML-only sites through the authenticated Whagons Pageup CLI at pageup.whagons.com. Use for project reports, handoffs, demos, dashboards, comparisons, and other HTML meant for human review.
 ---
 
 # Pages
 
 Use Pageup to turn HTML into an unlisted, shareable URL. A single standalone HTML file is the default; a small directory is available when the artifact genuinely benefits from multiple HTML pages. Treat creating and updating pages as authenticated, and viewing as public to anyone who has the URL.
+
+## Install and authenticate
+
+If `pageup` is not installed, install the Whagons build.
+
+macOS or Linux:
+
+```sh
+curl -fsSL https://pageup.whagons.com/install.sh | sh
+```
+
+Windows PowerShell:
+
+```powershell
+irm https://pageup.whagons.com/install.ps1 | iex
+```
+
+Authorize the device with a Google account on the Whagons developer allowlist:
+
+```sh
+pageup auth login
+pageup doctor
+```
+
+`pageup auth login` opens a browser. If the environment cannot open one, use `pageup auth login --no-open` and give the printed URL to the user. The server checks the same developer allowlist used by Whagons developer mode. Pageup stores a revocable device key after login and does not retain the Google token.
 
 ## Build the artifact
 
@@ -61,7 +86,7 @@ generate-html | pageup update PAGE_UUID -
 
 `pageup update` accepts either the full Pageup URL or its UUIDv7, replaces the HTML in place, and keeps the same page UUID. It can also convert a standalone page to a site or a site back to a standalone page; site URLs include a trailing slash so relative links resolve correctly. The key that created a page can update it; an admin key can update any page. Pages created before ownership tracking are admin-only until first updated by an admin. Use a new upload when the artifact should have a distinct URL or history boundary.
 
-Do not print, copy, or commit `~/.config/pageup/config.json`. If authentication is missing, install the CLI and create a device key, then have an existing admin authorize its public key; never transfer an existing private key.
+Do not print, copy, or commit `~/.config/pageup/config.json`. If authentication is missing, run `pageup auth login`. Never transfer a private key between devices.
 
 ## Verify and hand off
 

@@ -58,7 +58,7 @@ func TestResolveProjectSkillRoot(t *testing.T) {
 
 func TestParsePageID(t *testing.T) {
 	id := "019f620a-226d-7981-88d3-83da3b460b6c"
-	endpoint := "https://pages.gabrielmalek.com"
+	endpoint := "https://pageup.whagons.com"
 	for _, value := range []string{
 		id,
 		endpoint + "/" + id,

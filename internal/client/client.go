@@ -129,6 +129,58 @@ func (client *Client) Health(ctx context.Context) (map[string]string, error) {
 	return result, nil
 }
 
+func (client *Client) StartDeviceAuth(ctx context.Context, name, publicKey string) (api.DeviceAuthStartResponse, error) {
+	body, err := json.Marshal(api.DeviceAuthStartRequest{Name: name, PublicKey: publicKey})
+	if err != nil {
+		return api.DeviceAuthStartResponse{}, err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, client.endpoint.String()+"/api/auth/device/start", bytes.NewReader(body))
+	if err != nil {
+		return api.DeviceAuthStartResponse{}, err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("User-Agent", client.userAgent)
+	response, err := client.httpClient.Do(request)
+	if err != nil {
+		return api.DeviceAuthStartResponse{}, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return api.DeviceAuthStartResponse{}, decodeAPIError(response)
+	}
+	var result api.DeviceAuthStartResponse
+	if err := decodeJSON(response.Body, &result); err != nil {
+		return api.DeviceAuthStartResponse{}, err
+	}
+	return result, nil
+}
+
+func (client *Client) DeviceAuthStatus(ctx context.Context, id string) (api.DeviceAuthStatusResponse, error) {
+	if !protocol.IsUUIDv7(id) {
+		return api.DeviceAuthStatusResponse{}, errors.New("device authorization id must be a UUIDv7")
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, client.endpoint.String()+"/api/auth/device/"+url.PathEscape(id), nil)
+	if err != nil {
+		return api.DeviceAuthStatusResponse{}, err
+	}
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("User-Agent", client.userAgent)
+	response, err := client.httpClient.Do(request)
+	if err != nil {
+		return api.DeviceAuthStatusResponse{}, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return api.DeviceAuthStatusResponse{}, decodeAPIError(response)
+	}
+	var result api.DeviceAuthStatusResponse
+	if err := decodeJSON(response.Body, &result); err != nil {
+		return api.DeviceAuthStatusResponse{}, err
+	}
+	return result, nil
+}
+
 func (client *Client) doSigned(ctx context.Context, method, path string, body []byte, contentType string, output any) (string, error) {
 	nonce, err := protocol.NewUUIDv7(client.now())
 	if err != nil {

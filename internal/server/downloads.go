@@ -81,7 +81,7 @@ case ":$PATH:" in
   *":$(dirname "$destination"):"*) ;;
   *) echo "Add $(dirname "$destination") to PATH." ;;
 esac
-echo "Run: pageup init --endpoint $base_url --name \"this computer\""
+echo "Run: pageup auth login --endpoint $base_url --name \"this computer\""
 `
 	writer.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
 	writer.Header().Set("Cache-Control", "no-store")
@@ -110,7 +110,7 @@ if (($UserPath -split ';') -notcontains $InstallDir) {
   [Environment]::SetEnvironmentVariable('Path', ($UserPath.TrimEnd(';') + ';' + $InstallDir), 'User')
 }
 Write-Host "Installed pageup to $Destination"
-Write-Host "Open a new terminal, then run: pageup init --endpoint $BaseUrl --name 'this computer'"
+Write-Host "Open a new terminal, then run: pageup auth login --endpoint $BaseUrl --name 'this computer'"
 `
 	writer.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	writer.Header().Set("Cache-Control", "no-store")

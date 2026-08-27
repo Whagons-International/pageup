@@ -32,6 +32,10 @@ type testEnvironment struct {
 }
 
 func newTestEnvironment(t *testing.T, maxBytes int64) testEnvironment {
+	return newTestEnvironmentWithAuthorizer(t, maxBytes, nil)
+}
+
+func newTestEnvironmentWithAuthorizer(t *testing.T, maxBytes int64, authorizer DeveloperAuthorizer) testEnvironment {
 	t.Helper()
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -54,6 +58,7 @@ func newTestEnvironment(t *testing.T, maxBytes int64) testEnvironment {
 		Version:       "test",
 		Now:           time.Now,
 		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Authorizer:    authorizer,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -67,6 +72,126 @@ func newTestEnvironment(t *testing.T, maxBytes int64) testEnvironment {
 		Name:       "test admin",
 	}
 	return testEnvironment{server: httpServer, privateKey: privateKey, config: config, dataDir: dataDir, now: now}
+}
+
+type fakeDeveloperAuthorizer struct {
+	identity DeveloperIdentity
+	err      error
+	token    string
+}
+
+func (authorizer *fakeDeveloperAuthorizer) Authorize(_ context.Context, token string) (DeveloperIdentity, error) {
+	authorizer.token = token
+	return authorizer.identity, authorizer.err
+}
+
+func TestGoogleDeviceAuthAuthorizesUploadOnlyKey(t *testing.T) {
+	authorizer := &fakeDeveloperAuthorizer{identity: DeveloperIdentity{UserID: "firebase-dev", Email: "dev@whagons.com"}}
+	environment := newTestEnvironmentWithAuthorizer(t, 1<<20, authorizer)
+	defer environment.close()
+
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientConfig := pageclient.Config{
+		Version:    1,
+		Endpoint:   environment.server.URL,
+		KeyID:      protocol.KeyID(publicKey),
+		PrivateKey: protocol.EncodePrivateKey(privateKey),
+		Name:       "Matas laptop",
+	}
+	deviceClient, err := pageclient.New(clientConfig, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	flow, err := deviceClient.StartDeviceAuth(context.Background(), clientConfig.Name, protocol.EncodePublicKey(publicKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !protocol.IsUUIDv7(flow.ID) || flow.IntervalSeconds != 2 || flow.VerificationURL != environment.server.URL+"/auth/device/"+flow.ID {
+		t.Fatalf("flow = %#v", flow)
+	}
+
+	page, err := http.Get(flow.VerificationURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pageBody, _ := io.ReadAll(page.Body)
+	page.Body.Close()
+	if page.StatusCode != http.StatusOK || !strings.Contains(string(pageBody), "Matas laptop") || !strings.Contains(string(pageBody), "Continue with Google") {
+		t.Fatalf("authorization page = %d %q", page.StatusCode, pageBody)
+	}
+	status, err := deviceClient.DeviceAuthStatus(context.Background(), flow.ID)
+	if err != nil || status.Status != deviceAuthPending {
+		t.Fatalf("pending status = %#v, err = %v", status, err)
+	}
+
+	completeBody, _ := json.Marshal(api.DeviceAuthCompleteRequest{IDToken: "firebase-id-token"})
+	response, err := http.Post(environment.server.URL+"/api/auth/device/"+flow.ID+"/complete", "application/json", bytes.NewReader(completeBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || authorizer.token != "firebase-id-token" {
+		t.Fatalf("complete status = %d, token = %q", response.StatusCode, authorizer.token)
+	}
+	status, err = deviceClient.DeviceAuthStatus(context.Background(), flow.ID)
+	if err != nil || status.Status != deviceAuthApproved || status.Email != "dev@whagons.com" {
+		t.Fatalf("approved status = %#v, err = %v", status, err)
+	}
+
+	upload, err := deviceClient.Upload(context.Background(), []byte("<h1>team page</h1>"))
+	if err != nil || !upload.Created {
+		t.Fatalf("authorized upload = %#v, err = %v", upload, err)
+	}
+	if _, err := deviceClient.ListKeys(context.Background()); apiErrorStatus(err) != http.StatusUnauthorized {
+		t.Fatalf("Google-authorized key could manage keys: %v", err)
+	}
+}
+
+func TestGoogleDeviceAuthRejectsNonDeveloper(t *testing.T) {
+	authorizer := &fakeDeveloperAuthorizer{err: errDeveloperAccessRequired}
+	environment := newTestEnvironmentWithAuthorizer(t, 1<<20, authorizer)
+	defer environment.close()
+
+	publicKey, _, _ := ed25519.GenerateKey(rand.Reader)
+	clientConfig := pageclient.Config{Version: 1, Endpoint: environment.server.URL, KeyID: protocol.KeyID(publicKey), PrivateKey: protocol.EncodePrivateKey(mustPrivateKey(t)), Name: "Unknown laptop"}
+	privateKey, err := protocol.DecodePrivateKey(clientConfig.PrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientConfig.KeyID = protocol.KeyID(privateKey.Public().(ed25519.PublicKey))
+	deviceClient, err := pageclient.New(clientConfig, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	flow, err := deviceClient.StartDeviceAuth(context.Background(), clientConfig.Name, protocol.EncodePublicKey(privateKey.Public().(ed25519.PublicKey)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(api.DeviceAuthCompleteRequest{IDToken: "not-a-developer"})
+	response, err := http.Post(environment.server.URL+"/api/auth/device/"+flow.ID+"/complete", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusForbidden {
+		t.Fatalf("complete status = %d", response.StatusCode)
+	}
+	status, err := deviceClient.DeviceAuthStatus(context.Background(), flow.ID)
+	if err != nil || status.Status != deviceAuthDenied {
+		t.Fatalf("denied status = %#v, err = %v", status, err)
+	}
+}
+
+func mustPrivateKey(t *testing.T) ed25519.PrivateKey {
+	t.Helper()
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return privateKey
 }
 
 func (environment testEnvironment) close() {

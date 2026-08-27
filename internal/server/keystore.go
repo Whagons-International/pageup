@@ -27,16 +27,25 @@ type keyFile struct {
 }
 
 type KeyStore struct {
-	mu   sync.RWMutex
-	path string
-	keys map[string]api.Key
+	mu    sync.RWMutex
+	store objectStore
+	key   string
+	keys  map[string]api.Key
 }
 
 func NewKeyStore(path string, bootstrapJSON string, now time.Time) (*KeyStore, error) {
-	store := &KeyStore{path: path, keys: make(map[string]api.Key)}
-	data, err := os.ReadFile(path)
+	storage, err := newFilesystemObjectStore(filepath.Dir(path))
+	if err != nil {
+		return nil, err
+	}
+	return newKeyStore(storage, filepath.Base(path), bootstrapJSON, now)
+}
+
+func newKeyStore(storage objectStore, key, bootstrapJSON string, now time.Time) (*KeyStore, error) {
+	store := &KeyStore{store: storage, key: key, keys: make(map[string]api.Key)}
+	object, err := storage.Get(key)
 	if err == nil {
-		if err := store.load(data); err != nil {
+		if err := store.load(object.Body); err != nil {
 			return nil, fmt.Errorf("load key store: %w", err)
 		}
 		return store, nil
@@ -213,9 +222,6 @@ func (store *KeyStore) adminCountLocked() int {
 }
 
 func (store *KeyStore) saveLocked() error {
-	if err := os.MkdirAll(filepath.Dir(store.path), 0o700); err != nil {
-		return fmt.Errorf("create key store directory: %w", err)
-	}
 	keys := make([]api.Key, 0, len(store.keys))
 	for _, key := range store.keys {
 		keys = append(keys, key)
@@ -226,28 +232,7 @@ func (store *KeyStore) saveLocked() error {
 		return err
 	}
 	data = append(data, '\n')
-	temporary, err := os.CreateTemp(filepath.Dir(store.path), ".keys-*.json")
-	if err != nil {
-		return fmt.Errorf("create temporary key store: %w", err)
-	}
-	temporaryName := temporary.Name()
-	defer os.Remove(temporaryName)
-	if err := temporary.Chmod(0o600); err != nil {
-		temporary.Close()
-		return err
-	}
-	if _, err := temporary.Write(data); err != nil {
-		temporary.Close()
-		return err
-	}
-	if err := temporary.Sync(); err != nil {
-		temporary.Close()
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(temporaryName, store.path); err != nil {
+	if _, err := store.store.Put(store.key, data, false); err != nil {
 		return fmt.Errorf("replace key store: %w", err)
 	}
 	return nil

@@ -28,3 +28,5 @@ pageup update <URL-or-UUID> path/to/site
 The page's creator key or an admin key may update it. `pageup update <URL-or-UUID> -` accepts HTML from standard input.
 
 Run `pageup doctor` if credentials or connectivity are in doubt. Never print, commit, or copy the private key from `~/.config/pageup/config.json`.
+
+If Pageup is missing, install it from `https://pageup.whagons.com/install.sh` on macOS or Linux, or `https://pageup.whagons.com/install.ps1` on Windows. Run `pageup auth login` to authorize the device through the Whagons Google developer allowlist.

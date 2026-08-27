@@ -5,7 +5,6 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"html/template"
 	"io"
 	"log/slog"
@@ -13,7 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -38,11 +36,16 @@ type Config struct {
 	Version       string
 	Logger        *slog.Logger
 	Now           func() time.Time
+	Authorizer    DeveloperAuthorizer
+	S3            S3Config
+	storage       objectStore
 }
 
 type Server struct {
 	config Config
 	keys   *KeyStore
+	auth   *deviceAuthStore
+	store  objectStore
 	pages  sync.Mutex
 	nonces struct {
 		sync.Mutex
@@ -70,15 +73,24 @@ func New(config Config) (*Server, error) {
 			return nil, errors.New("PAGEUP_PUBLIC_URL must be an origin such as https://pages.example.com")
 		}
 	}
-	pagesDir := filepath.Join(config.DataDir, "pages")
-	if err := os.MkdirAll(pagesDir, 0o700); err != nil {
-		return nil, fmt.Errorf("create pages directory: %w", err)
+	store := config.storage
+	if store == nil {
+		var err error
+		if strings.TrimSpace(config.S3.Endpoint) != "" {
+			store, err = newS3ObjectStore(config.S3)
+		} else {
+			store, err = newFilesystemObjectStore(config.DataDir)
+		}
+		if err != nil {
+			return nil, err
+		}
 	}
-	keys, err := NewKeyStore(filepath.Join(config.DataDir, "keys.json"), config.BootstrapKeys, config.Now())
+	keys, err := newKeyStore(store, "keys.json", config.BootstrapKeys, config.Now())
 	if err != nil {
 		return nil, err
 	}
-	server := &Server{config: config, keys: keys}
+	server := &Server{config: config, keys: keys, store: store}
+	server.auth = newDeviceAuthStore(config.Now, config.Authorizer)
 	server.nonces.used = make(map[string]time.Time)
 	return server, nil
 }
@@ -92,6 +104,9 @@ func (server *Server) Handler() http.Handler {
 	mux.HandleFunc("/install.sh", server.handleInstallShell)
 	mux.HandleFunc("/install.ps1", server.handleInstallPowerShell)
 	mux.HandleFunc("/downloads/", server.handleDownload)
+	mux.HandleFunc("/auth/device/", server.handleDeviceAuthPage)
+	mux.HandleFunc("/api/auth/device/start", server.handleDeviceAuthStart)
+	mux.HandleFunc("/api/auth/device/", server.handleDeviceAuth)
 	mux.HandleFunc("/api/pages", server.handleUpload)
 	mux.HandleFunc("/api/pages/", server.handleUpdate)
 	mux.HandleFunc("/api/keys", server.handleKeys)
@@ -350,11 +365,7 @@ func (server *Server) handlePage(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 	server.pages.Lock()
-	kind, storedPath, body, err := server.readPageContent(id)
-	var info os.FileInfo
-	if err == nil {
-		info, err = os.Stat(storedPath)
-	}
+	kind, _, stored, err := server.readPageContent(id)
 	server.pages.Unlock()
 	if errors.Is(err, os.ErrNotExist) {
 		http.NotFound(writer, request)
@@ -369,14 +380,14 @@ func (server *Server) handlePage(writer http.ResponseWriter, request *http.Reque
 			http.NotFound(writer, request)
 			return
 		}
-		serveHTML(writer, request, id+".html", info.ModTime(), body)
+		serveHTML(writer, request, id+".html", stored.LastModified, stored.Body)
 		return
 	}
 	if !hasSubpath {
 		redirectWithSlash(writer, request)
 		return
 	}
-	site, err := sitebundle.Parse(body, server.config.MaxPageBytes)
+	site, err := sitebundle.Parse(stored.Body, server.config.MaxPageBytes)
 	if err != nil {
 		server.config.Logger.Error("read HTML site", "page_id", id, "error", err)
 		writeError(writer, http.StatusInternalServerError, "could not read page")
@@ -399,7 +410,7 @@ func (server *Server) handlePage(writer http.ResponseWriter, request *http.Reque
 		http.NotFound(writer, request)
 		return
 	}
-	serveHTML(writer, request, requested, info.ModTime(), contents)
+	serveHTML(writer, request, requested, stored.LastModified, contents)
 }
 
 func pageKindFromContentType(value string) (pageKind, bool) {
@@ -624,8 +635,8 @@ const landingHTML = `<!doctype html>
 </style>
 <main>
   <h1>pageup<span class="dot">.</span></h1>
-  <p>Private uploads. Shareable, unlisted HTML pages.</p>
-  <code>curl -fsSL {{.URL}}/install.sh | sh</code>
+  <p>Shareable, unlisted HTML pages for the Whagons team.</p>
+  <code>curl -fsSL {{.URL}}/install.sh | sh<br>pageup auth login</code>
 </main>
 </html>`
 
