@@ -113,7 +113,7 @@ Server settings:
 | `PAGEUP_MAX_PAGE_BYTES` | `5242880` | Maximum HTML bytes per page or site |
 | `PAGEUP_LISTEN_ADDR` | `:8080` | HTTP listen address |
 | `PAGEUP_WHAGONS_AUTH_URL` | Gonvex production endpoint | Authenticated developer-allowlist check |
-| `PAGEUP_WHAGONS_PROJECT_ID` | `whagons-5` | Gonvex project header |
+| `PAGEUP_WHAGONS_PROJECT_ID` | production Whagons project UUID | Gonvex project header; distinct from the Firebase project ID |
 | `PAGEUP_S3_ENDPOINT` | empty | S3-compatible origin; production uses `tg-s3` |
 | `PAGEUP_S3_REGION` | `us-east-1` | Signing region |
 | `PAGEUP_S3_BUCKET` | empty | Bucket containing Pageup data |

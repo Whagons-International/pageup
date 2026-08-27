@@ -37,7 +37,7 @@ func main() {
 		Logger:        logger,
 		Authorizer: pageupserver.NewWhagonsDeveloperAuthorizer(
 			envOr("PAGEUP_WHAGONS_AUTH_URL", "https://gonvex.whagons.com/api/internal/pageup/authorize"),
-			envOr("PAGEUP_WHAGONS_PROJECT_ID", "whagons-5"),
+			envOr("PAGEUP_WHAGONS_PROJECT_ID", "01f18dfa-673a-618d-913c-36ebad0f0bd1"),
 		),
 		S3: pageupserver.S3Config{
 			Endpoint:        os.Getenv("PAGEUP_S3_ENDPOINT"),
