@@ -30,7 +30,7 @@ pageup auth login
 pageup doctor
 ```
 
-`pageup auth login` opens a browser. If the environment cannot open one, use `pageup auth login --no-open` and give the printed URL to the user. The server checks the same developer allowlist used by Whagons developer mode. Pageup stores a revocable device key after login and does not retain the Google token.
+`pageup auth login` opens a browser. On an SSH or headless machine, use `pageup auth login --no-open`; it prints `https://pageup.whagons.com/auth` and a short device code to enter on a computer with a browser. Keep the remote command running until approval completes. The server checks the same developer allowlist used by Whagons developer mode. Pageup stores a revocable device key after login and does not retain the Google token.
 
 ## Build the artifact
 

@@ -33,7 +33,7 @@ pageup auth login
 pageup doctor
 ```
 
-Use `pageup auth login --no-open` on a headless machine and open the printed URL elsewhere. Pageup creates one upload-only key for the device. Removing the email from the Whagons developer allowlist prevents new device authorization; existing device keys can be revoked by a Pageup admin.
+Use `pageup auth login --no-open` on a headless machine. It prints `https://pageup.whagons.com/auth` and a short device code; open that address elsewhere, enter the code, and leave the remote command running until approval completes. Pageup creates one upload-only key for the device. Removing the email from the Whagons developer allowlist prevents new device authorization; existing device keys can be revoked by a Pageup admin.
 
 Every Pageup CLI binary also contains the complete `$pages` agent skill. Install it into the detected Codex or `~/.agents` skill directory with:
 

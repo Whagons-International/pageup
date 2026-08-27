@@ -131,10 +131,9 @@ func runAuth(args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println("Sign in with your Whagons developer Google account:")
-	fmt.Println(flow.VerificationURL)
+	openTarget := printDeviceAuthInstructions(os.Stdout, flow)
 	if !*noOpen {
-		if err := openURL(flow.VerificationURL); err != nil {
+		if err := openURL(openTarget); err != nil {
 			fmt.Fprintf(os.Stderr, "pageup: could not open a browser: %v\n", err)
 		}
 	}
@@ -171,6 +170,23 @@ func runAuth(args []string) error {
 		case <-ticker.C:
 		}
 	}
+}
+
+func printDeviceAuthInstructions(writer io.Writer, flow api.DeviceAuthStartResponse) string {
+	openTarget := flow.VerificationURL
+	if flow.UserCode != "" && flow.VerificationURI != "" {
+		if flow.VerificationURLComplete != "" {
+			openTarget = flow.VerificationURLComplete
+		}
+		fmt.Fprintln(writer, "On a computer with a browser, open:")
+		fmt.Fprintln(writer, flow.VerificationURI)
+		fmt.Fprintln(writer, "Enter this device code:")
+		fmt.Fprintln(writer, flow.UserCode)
+		return openTarget
+	}
+	fmt.Fprintln(writer, "Sign in with your Whagons developer Google account:")
+	fmt.Fprintln(writer, flow.VerificationURL)
+	return openTarget
 }
 
 func runInit(args []string) error {
@@ -683,7 +699,7 @@ Usage:
   pageup <file.html|site-directory>    upload in one command
   pageup -                            upload HTML from stdin
   pageup update URL <path|->          replace a page or site at the same URL
-  pageup auth login                   authorize this device with Google
+  pageup auth login                   authorize locally or with a headless device code
   pageup init [--endpoint URL]        create this device's key pair
   pageup keys add --name NAME PUBKEY  authorize another device
   pageup keys list                    list authorized devices

@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -109,8 +110,26 @@ func TestGoogleDeviceAuthAuthorizesUploadOnlyKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !protocol.IsUUIDv7(flow.ID) || flow.IntervalSeconds != 2 || flow.VerificationURL != environment.server.URL+"/auth/device/"+flow.ID {
+	if !protocol.IsUUIDv7(flow.ID) || flow.IntervalSeconds != 2 || normalizeUserCode(flow.UserCode) != flow.UserCode || flow.VerificationURI != environment.server.URL+"/auth" || flow.VerificationURL != environment.server.URL+"/auth/device/"+flow.ID || flow.VerificationURLComplete != environment.server.URL+"/auth?code="+flow.UserCode {
 		t.Fatalf("flow = %#v", flow)
+	}
+	codePage, err := http.Get(flow.VerificationURI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	codePageBody, _ := io.ReadAll(codePage.Body)
+	codePage.Body.Close()
+	if codePage.StatusCode != http.StatusOK || !strings.Contains(string(codePageBody), "Device code") || !strings.Contains(string(codePageBody), "XXXX-XXXX") {
+		t.Fatalf("code page = %d %q", codePage.StatusCode, codePageBody)
+	}
+	noRedirect := &http.Client{CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
+	codeResponse, err := noRedirect.PostForm(flow.VerificationURI, url.Values{"code": {strings.ToLower(strings.ReplaceAll(flow.UserCode, "-", ""))}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	codeResponse.Body.Close()
+	if codeResponse.StatusCode != http.StatusSeeOther || codeResponse.Header.Get("Location") != "/auth/device/"+flow.ID {
+		t.Fatalf("code redirect = %d %q", codeResponse.StatusCode, codeResponse.Header.Get("Location"))
 	}
 
 	page, err := http.Get(flow.VerificationURL)
@@ -185,6 +204,28 @@ func TestGoogleDeviceAuthRejectsNonDeveloper(t *testing.T) {
 	status, err := deviceClient.DeviceAuthStatus(context.Background(), flow.ID)
 	if err != nil || status.Status != deviceAuthDenied {
 		t.Fatalf("denied status = %#v, err = %v", status, err)
+	}
+}
+
+func TestDeviceAuthUserCodeFormat(t *testing.T) {
+	seen := make(map[string]bool)
+	for range 100 {
+		code, err := newUserCode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(code) != 9 || code[4] != '-' || normalizeUserCode(strings.ToLower(strings.ReplaceAll(code, "-", " "))) != code {
+			t.Fatalf("invalid device code %q", code)
+		}
+		if seen[code] {
+			t.Fatalf("duplicate device code %q", code)
+		}
+		seen[code] = true
+	}
+	for _, invalid := range []string{"", "ABCD", "ABCD-IO10", "ABCD-EFGH-more"} {
+		if normalized := normalizeUserCode(invalid); normalized != "" {
+			t.Fatalf("normalizeUserCode(%q) = %q", invalid, normalized)
+		}
 	}
 }
 

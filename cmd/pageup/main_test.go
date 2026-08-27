@@ -6,8 +6,31 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/desarso/pageup/internal/api"
 	"github.com/desarso/pageup/internal/sitebundle"
 )
+
+func TestDeviceAuthInstructionsPreferShortCode(t *testing.T) {
+	flow := api.DeviceAuthStartResponse{
+		UserCode:                "ABCD-EFGH",
+		VerificationURI:         "https://pageup.whagons.com/auth",
+		VerificationURL:         "https://pageup.whagons.com/auth/device/id",
+		VerificationURLComplete: "https://pageup.whagons.com/auth?code=ABCD-EFGH",
+	}
+	var output strings.Builder
+	openTarget := printDeviceAuthInstructions(&output, flow)
+	for _, expected := range []string{flow.VerificationURI, flow.UserCode, "computer with a browser"} {
+		if !strings.Contains(output.String(), expected) {
+			t.Fatalf("device auth instructions are missing %q: %q", expected, output.String())
+		}
+	}
+	if strings.Contains(output.String(), flow.VerificationURL) {
+		t.Fatalf("device auth instructions exposed the long URL: %q", output.String())
+	}
+	if openTarget != flow.VerificationURLComplete {
+		t.Fatalf("open target = %q", openTarget)
+	}
+}
 
 func TestResolveSkillRoot(t *testing.T) {
 	home := t.TempDir()

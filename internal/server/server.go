@@ -104,6 +104,7 @@ func (server *Server) Handler() http.Handler {
 	mux.HandleFunc("/install.sh", server.handleInstallShell)
 	mux.HandleFunc("/install.ps1", server.handleInstallPowerShell)
 	mux.HandleFunc("/downloads/", server.handleDownload)
+	mux.HandleFunc("/auth", server.handleDeviceAuthCodePage)
 	mux.HandleFunc("/auth/device/", server.handleDeviceAuthPage)
 	mux.HandleFunc("/api/auth/device/start", server.handleDeviceAuthStart)
 	mux.HandleFunc("/api/auth/device/", server.handleDeviceAuth)

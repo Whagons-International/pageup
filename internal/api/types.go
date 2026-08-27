@@ -12,10 +12,13 @@ type DeviceAuthStartRequest struct {
 }
 
 type DeviceAuthStartResponse struct {
-	ID              string    `json:"id"`
-	VerificationURL string    `json:"verification_url"`
-	ExpiresAt       time.Time `json:"expires_at"`
-	IntervalSeconds int       `json:"interval_seconds"`
+	ID                      string    `json:"id"`
+	UserCode                string    `json:"user_code,omitempty"`
+	VerificationURI         string    `json:"verification_uri,omitempty"`
+	VerificationURL         string    `json:"verification_url"`
+	VerificationURLComplete string    `json:"verification_url_complete,omitempty"`
+	ExpiresAt               time.Time `json:"expires_at"`
+	IntervalSeconds         int       `json:"interval_seconds"`
 }
 
 type DeviceAuthStatusResponse struct {
