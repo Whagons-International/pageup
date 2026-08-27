@@ -121,6 +121,7 @@ func newS3ObjectStore(config S3Config) (*s3ObjectStore, error) {
 		context.Background(),
 		awsconfig.WithRegion(config.Region),
 		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(config.AccessKeyID, config.SecretAccessKey, "")),
+		awsconfig.WithRequestChecksumCalculation(aws.RequestChecksumCalculationWhenRequired),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("configure S3 storage: %w", err)

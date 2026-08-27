@@ -39,6 +39,9 @@ func TestS3ObjectStoreUsesPathStyleAndPrefix(t *testing.T) {
 			writer.Header().Set("Last-Modified", "Wed, 27 Aug 2026 12:00:00 GMT")
 			writer.Write(body)
 		case http.MethodPut:
+			if value := request.Header.Get("X-Amz-Content-Sha256"); strings.HasPrefix(value, "STREAMING-") {
+				t.Errorf("PutObject used AWS chunked framing: %s", value)
+			}
 			body, err := io.ReadAll(request.Body)
 			if err != nil {
 				t.Fatal(err)
