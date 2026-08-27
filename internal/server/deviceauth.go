@@ -243,7 +243,7 @@ func (server *Server) handleDeviceAuthPage(writer http.ResponseWriter, request *
 	}
 	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 	writer.Header().Set("Cache-Control", "no-store")
-	writer.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline' https://www.gstatic.com; style-src 'unsafe-inline'; connect-src 'self' https://*.googleapis.com https://securetoken.googleapis.com https://identitytoolkit.googleapis.com; frame-src https://accounts.google.com https://*.firebaseapp.com; img-src data: https://*.googleusercontent.com; base-uri 'none'; form-action 'none'")
+	writer.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline' https://www.gstatic.com https://apis.google.com; style-src 'unsafe-inline'; connect-src 'self' https://*.googleapis.com https://securetoken.googleapis.com https://identitytoolkit.googleapis.com; frame-src https://accounts.google.com https://*.firebaseapp.com; img-src data: https://*.googleusercontent.com; base-uri 'none'; form-action 'none'")
 	if err := deviceAuthPageTemplate.Execute(writer, session); err != nil {
 		server.config.Logger.Error("render device authorization page", "error", err)
 	}

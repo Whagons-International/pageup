@@ -122,6 +122,9 @@ func TestGoogleDeviceAuthAuthorizesUploadOnlyKey(t *testing.T) {
 	if page.StatusCode != http.StatusOK || !strings.Contains(string(pageBody), "Matas laptop") || !strings.Contains(string(pageBody), "Continue with Google") {
 		t.Fatalf("authorization page = %d %q", page.StatusCode, pageBody)
 	}
+	if policy := page.Header.Get("Content-Security-Policy"); !strings.Contains(policy, "https://apis.google.com") {
+		t.Fatalf("authorization page CSP blocks Firebase popup helper: %q", policy)
+	}
 	status, err := deviceClient.DeviceAuthStatus(context.Background(), flow.ID)
 	if err != nil || status.Status != deviceAuthPending {
 		t.Fatalf("pending status = %#v, err = %v", status, err)
