@@ -3,10 +3,10 @@
 Pageup turns a local HTML file or small HTML-only directory into an unlisted, shareable URL with one command:
 
 ```console
-$ pageup report.html
+$ pageup-whagons report.html
 https://pageup.whagons.com/019c...
 
-$ pageup ./experiment
+$ pageup-whagons ./experiment
 https://pageup.whagons.com/019d.../
 ```
 
@@ -29,60 +29,60 @@ irm https://pageup.whagons.com/install.ps1 | iex
 Authorize the device with your Whagons developer Google account:
 
 ```sh
-pageup auth login
-pageup doctor
+pageup-whagons auth login
+pageup-whagons doctor
 ```
 
-Use `pageup auth login --no-open` on a headless machine. It prints `https://pageup.whagons.com/auth` and a short device code; open that address elsewhere, enter the code, and leave the remote command running until approval completes. Pageup creates one upload-only key for the device. Removing the email from the Whagons developer allowlist prevents new device authorization; existing device keys can be revoked by a Pageup admin.
+Use `pageup-whagons auth login --no-open` on a headless machine. It prints `https://pageup.whagons.com/auth` and a short device code; open that address elsewhere, enter the code, and leave the remote command running until approval completes. Pageup creates one upload-only key for the device. Removing the email from the Whagons developer allowlist prevents new device authorization; existing device keys can be revoked by a Pageup admin.
 
 Every Pageup CLI binary also contains the complete `$pages` agent skill. Install it into the detected Codex or `~/.agents` skill directory with:
 
 ```sh
-pageup skill install
+pageup-whagons skill install
 ```
 
-Use `pageup skill show` to inspect the embedded instructions, `--harness project` to install under `./.agents/skills`, or `--target DIR` for another agent harness. Existing skill files are preserved unless `--force` is supplied.
+Use `pageup-whagons skill show` to inspect the embedded instructions, `--harness project` to install under `./.agents/skills`, or `--target DIR` for another agent harness. Existing skill files are preserved unless `--force` is supplied.
 
 The manual pairing commands remain available for the bootstrap administrator:
 
 ```sh
-PAGEUP_CONFIG=~/.config/pageup-whagons-admin.json pageup init --endpoint https://pageup.whagons.com --name "Pageup admin"
+PAGEUP_CONFIG=~/.config/pageup-whagons-admin.json pageup-whagons init --endpoint https://pageup.whagons.com --name "Pageup admin"
 ```
 
 The command prints a public key and an approval command. Run that approval command on a computer which already has an admin credential, then verify the new computer:
 
 ```sh
-pageup doctor
-pageup example.html
+pageup-whagons doctor
+pageup-whagons example.html
 ```
 
-This manual flow is not needed for normal team onboarding. It never moves a private key between computers. Use `pageup keys list` and `pageup keys revoke KEY_ID` from the bootstrap admin identity to audit or revoke devices.
+This manual flow is not needed for normal team onboarding. It never moves a private key between computers. Use `pageup-whagons keys list` and `pageup-whagons keys revoke KEY_ID` from the bootstrap admin identity to audit or revoke devices.
 
 ## CLI
 
 ```text
-pageup file.html                     upload a file; print its URL
-pageup ./site                        upload an HTML-only directory
-pageup -                             upload HTML from stdin
-pageup --json file.html              return id, URL, and revision state as JSON
-pageup --open file.html              upload and open in the default browser
-pageup update URL file.html          update HTML without changing the URL
-pageup update URL ./site             update or convert to a multi-page site
-pageup update UUID -                 update by id with HTML from stdin
-pageup auth login                    authorize this device with Google
-pageup doctor                        test connectivity and authentication
-pageup whoami                        show the active key
-pageup public-key                    print this device's public key
-pageup skill show                    print the embedded Pages skill
-pageup skill install                 install Pages into an agent harness
-pageup keys add --name NAME PUBKEY   authorize another device
-pageup keys list                     list authorized devices
-pageup keys revoke KEY_ID            revoke a device
+pageup-whagons file.html                     upload a file; print its URL
+pageup-whagons ./site                        upload an HTML-only directory
+pageup-whagons -                             upload HTML from stdin
+pageup-whagons --json file.html              return id, URL, and revision state as JSON
+pageup-whagons --open file.html              upload and open in the default browser
+pageup-whagons update URL file.html          update HTML without changing the URL
+pageup-whagons update URL ./site             update or convert to a multi-page site
+pageup-whagons update UUID -                 update by id with HTML from stdin
+pageup-whagons auth login                    authorize this device with Google
+pageup-whagons doctor                        test connectivity and authentication
+pageup-whagons whoami                        show the active key
+pageup-whagons public-key                    print this device's public key
+pageup-whagons skill show                    print the embedded Pages skill
+pageup-whagons skill install                 install Pages into an agent harness
+pageup-whagons keys add --name NAME PUBKEY   authorize another device
+pageup-whagons keys list                     list authorized devices
+pageup-whagons keys revoke KEY_ID            revoke a device
 ```
 
 For a multi-page site, pass a directory containing `index.html` at its root. Pageup recursively preserves up to 100 `.html` files, so links such as `href="about.html"` and `href="docs/"` work as expected. A nested `docs/index.html` is served at the directory-style URL `/docs/`. Directories may contain only HTML: keep CSS and JavaScript inline and use remote URLs for images, fonts, and other assets. The combined uncompressed HTML remains subject to the 5 MiB limit.
 
-Credentials live at `~/.config/pageup/config.json` on Linux, the normal application config directory on macOS or Windows, and use mode `0600` where supported. `PAGEUP_CONFIG` selects another config file. Headless agents can use `PAGEUP_PRIVATE_KEY` with `PAGEUP_ENDPOINT` instead; treat the private-key value as a secret.
+The `pageup-whagons` executable keeps credentials under the platform's `pageup-whagons` application config directory (`~/.config/pageup-whagons/config.json` on Linux) and uses mode `0600` where supported. This is intentionally separate from the legacy Gabriel Pageup config. `PAGEUP_CONFIG` selects another config file. Headless agents can use `PAGEUP_PRIVATE_KEY` with `PAGEUP_ENDPOINT` instead; treat the private-key value as a secret.
 
 ## Security model
 

@@ -66,7 +66,7 @@ func LoadConfig(path string) (Config, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			privateKeyValue := strings.TrimSpace(os.Getenv("PAGEUP_PRIVATE_KEY"))
 			if privateKeyValue == "" {
-				return Config{}, fmt.Errorf("no pageup credentials at %s; run 'pageup auth login'", path)
+				return Config{}, fmt.Errorf("no pageup credentials at %s; run 'pageup-whagons auth login'", path)
 			}
 			privateKey, decodeErr := protocol.DecodePrivateKey(privateKeyValue)
 			if decodeErr != nil {

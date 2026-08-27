@@ -32,6 +32,28 @@ func TestDeviceAuthInstructionsPreferShortCode(t *testing.T) {
 	}
 }
 
+func TestWhagonsExecutableUsesIsolatedConfig(t *testing.T) {
+	t.Setenv("PAGEUP_CONFIG", "")
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "config"))
+	if err := configureWhagonsExecutableConfig("/usr/local/bin/pageup-whagons"); err != nil {
+		t.Fatal(err)
+	}
+	expected := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "pageup-whagons", "config.json")
+	if actual := os.Getenv("PAGEUP_CONFIG"); actual != expected {
+		t.Fatalf("PAGEUP_CONFIG = %q, want %q", actual, expected)
+	}
+}
+
+func TestLegacyExecutableKeepsExistingConfigDefault(t *testing.T) {
+	t.Setenv("PAGEUP_CONFIG", "")
+	if err := configureWhagonsExecutableConfig("/usr/local/bin/pageup"); err != nil {
+		t.Fatal(err)
+	}
+	if actual := os.Getenv("PAGEUP_CONFIG"); actual != "" {
+		t.Fatalf("legacy executable changed PAGEUP_CONFIG to %q", actual)
+	}
+}
+
 func TestResolveSkillRoot(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -112,7 +134,7 @@ func TestParsePageID(t *testing.T) {
 func TestHelpExplainsUpdatesAndEmbeddedSkill(t *testing.T) {
 	var output strings.Builder
 	printUsage(&output)
-	for _, expected := range []string{"pageup update URL", "pageup skill install", "same URL", "site-directory", "100 .html files"} {
+	for _, expected := range []string{"pageup-whagons update URL", "pageup-whagons skill install", "same URL", "site-directory", "100 .html files"} {
 		if !strings.Contains(output.String(), expected) {
 			t.Fatalf("help is missing %q", expected)
 		}

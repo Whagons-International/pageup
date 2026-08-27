@@ -65,12 +65,12 @@ case "$arch" in
 esac
 
 if [ "$os" = windows ]; then
-  destination="$HOME/bin/pageup.exe"
+  destination="$HOME/bin/pageup-whagons.exe"
   mkdir -p "$HOME/bin"
 elif [ -w /usr/local/bin ]; then
-  destination=/usr/local/bin/pageup
+  destination=/usr/local/bin/pageup-whagons
 else
-  destination="$HOME/.local/bin/pageup"
+  destination="$HOME/.local/bin/pageup-whagons"
   mkdir -p "$HOME/.local/bin"
 fi
 
@@ -81,12 +81,12 @@ chmod 0755 "$temporary"
 mv "$temporary" "$destination"
 trap - EXIT INT TERM
 
-echo "Installed pageup to $destination"
+echo "Installed pageup-whagons to $destination"
 case ":$PATH:" in
   *":$(dirname "$destination"):"*) ;;
   *) echo "Add $(dirname "$destination") to PATH." ;;
 esac
-echo "Run: pageup auth login --endpoint $base_url --name \"this computer\""
+echo "Run: pageup-whagons auth login --endpoint $base_url --name \"this computer\""
 `
 	writer.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
 	writer.Header().Set("Cache-Control", "no-store")
@@ -106,16 +106,16 @@ func (server *Server) handleInstallPowerShell(writer http.ResponseWriter, reques
 	script := `$ErrorActionPreference = 'Stop'
 $BaseUrl = '` + baseURL + `'
 $Arch = if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq 'Arm64') { 'arm64' } else { 'amd64' }
-$InstallDir = Join-Path $env:LOCALAPPDATA 'Programs\pageup'
-$Destination = Join-Path $InstallDir 'pageup.exe'
+$InstallDir = Join-Path $env:LOCALAPPDATA 'Programs\pageup-whagons'
+$Destination = Join-Path $InstallDir 'pageup-whagons.exe'
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 Invoke-WebRequest -UseBasicParsing "$BaseUrl/downloads/pageup-windows-$Arch.exe" -OutFile $Destination
 $UserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 if (($UserPath -split ';') -notcontains $InstallDir) {
   [Environment]::SetEnvironmentVariable('Path', ($UserPath.TrimEnd(';') + ';' + $InstallDir), 'User')
 }
-Write-Host "Installed pageup to $Destination"
-Write-Host "Open a new terminal, then run: pageup auth login --endpoint $BaseUrl --name 'this computer'"
+Write-Host "Installed pageup-whagons to $Destination"
+Write-Host "Open a new terminal, then run: pageup-whagons auth login --endpoint $BaseUrl --name 'this computer'"
 `
 	writer.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	writer.Header().Set("Cache-Control", "no-store")

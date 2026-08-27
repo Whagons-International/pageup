@@ -27,10 +27,29 @@ import (
 var version = "dev"
 
 func main() {
+	if err := configureWhagonsExecutableConfig(os.Args[0]); err != nil {
+		fmt.Fprintln(os.Stderr, "pageup:", err)
+		os.Exit(1)
+	}
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "pageup:", err)
 		os.Exit(1)
 	}
+}
+
+func configureWhagonsExecutableConfig(executable string) error {
+	if strings.TrimSpace(os.Getenv("PAGEUP_CONFIG")) != "" {
+		return nil
+	}
+	name := strings.TrimSuffix(strings.ToLower(filepath.Base(executable)), ".exe")
+	if name != "pageup-whagons" {
+		return nil
+	}
+	directory, err := os.UserConfigDir()
+	if err != nil {
+		return err
+	}
+	return os.Setenv("PAGEUP_CONFIG", filepath.Join(directory, "pageup-whagons", "config.json"))
 }
 
 func run(args []string) error {
@@ -70,7 +89,7 @@ func run(args []string) error {
 
 func runAuth(args []string) error {
 	if len(args) == 0 || args[0] != "login" {
-		return errors.New("usage: pageup auth login [--endpoint URL] [--name DEVICE] [--no-open] [--force]")
+		return errors.New("usage: pageup-whagons auth login [--endpoint URL] [--name DEVICE] [--no-open] [--force]")
 	}
 	flags := flag.NewFlagSet("auth login", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
@@ -159,14 +178,14 @@ func runAuth(args []string) error {
 		case "denied":
 			return errors.New("this Google account does not have Whagons developer access")
 		case "expired":
-			return errors.New("Google sign-in expired; run 'pageup auth login' again")
+			return errors.New("Google sign-in expired; run 'pageup-whagons auth login' again")
 		case "pending":
 		default:
 			return fmt.Errorf("unexpected authorization status %q", status.Status)
 		}
 		select {
 		case <-ctx.Done():
-			return errors.New("Google sign-in timed out; run 'pageup auth login' again")
+			return errors.New("Google sign-in timed out; run 'pageup-whagons auth login' again")
 		case <-ticker.C:
 		}
 	}
@@ -241,7 +260,7 @@ func runUpload(args []string) error {
 		return err
 	}
 	if flags.NArg() != 1 {
-		return errors.New("usage: pageup [--json] [--open] <file.html|site-directory|->")
+		return errors.New("usage: pageup-whagons [--json] [--open] <file.html|site-directory|->")
 	}
 	artifact, err := readArtifact(flags.Arg(0))
 	if err != nil {
@@ -284,7 +303,7 @@ func runUpdate(args []string) error {
 		return err
 	}
 	if flags.NArg() != 2 {
-		return errors.New("usage: pageup update [--json] [--open] <URL-or-UUID> <file.html|site-directory|->")
+		return errors.New("usage: pageup-whagons update [--json] [--open] <URL-or-UUID> <file.html|site-directory|->")
 	}
 	pageup, config, err := configuredClient()
 	if err != nil {
@@ -324,7 +343,7 @@ func runUpdate(args []string) error {
 
 func runKeys(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: pageup keys <add|list|revoke>")
+		return errors.New("usage: pageup-whagons keys <add|list|revoke>")
 	}
 	switch args[0] {
 	case "add":
@@ -337,7 +356,7 @@ func runKeys(args []string) error {
 			return err
 		}
 		if *name == "" || flags.NArg() != 1 {
-			return errors.New("usage: pageup keys add --name <device> [--role upload|admin] <public-key>")
+			return errors.New("usage: pageup-whagons keys add --name <device> [--role upload|admin] <public-key>")
 		}
 		pageup, _, err := configuredClient()
 		if err != nil {
@@ -362,7 +381,7 @@ func runKeys(args []string) error {
 			return err
 		}
 		if flags.NArg() != 0 {
-			return errors.New("usage: pageup keys list [--json]")
+			return errors.New("usage: pageup-whagons keys list [--json]")
 		}
 		pageup, _, err := configuredClient()
 		if err != nil {
@@ -391,7 +410,7 @@ func runKeys(args []string) error {
 			return err
 		}
 		if flags.NArg() != 1 {
-			return errors.New("usage: pageup keys revoke <key-id>")
+			return errors.New("usage: pageup-whagons keys revoke <key-id>")
 		}
 		pageup, _, err := configuredClient()
 		if err != nil {
@@ -470,12 +489,12 @@ func runPublicKey(args []string) error {
 
 func runSkill(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: pageup skill <show|install>")
+		return errors.New("usage: pageup-whagons skill <show|install>")
 	}
 	switch args[0] {
 	case "show":
 		if len(args) != 1 {
-			return errors.New("usage: pageup skill show")
+			return errors.New("usage: pageup-whagons skill show")
 		}
 		content, err := pageskill.SkillMarkdown()
 		if err != nil {
@@ -494,7 +513,7 @@ func runSkill(args []string) error {
 			return err
 		}
 		if flags.NArg() != 0 {
-			return errors.New("usage: pageup skill install [--harness auto|codex|agents|project] [--target DIR] [--force]")
+			return errors.New("usage: pageup-whagons skill install [--harness auto|codex|agents|project] [--target DIR] [--force]")
 		}
 		root, resolvedHarness, err := resolveSkillRoot(*harness, *target)
 		if err != nil {
@@ -696,28 +715,28 @@ func printUsage(writer io.Writer) {
 	fmt.Fprintln(writer, `pageup — private HTML uploads, shareable URLs
 
 Usage:
-  pageup <file.html|site-directory>    upload in one command
-  pageup -                            upload HTML from stdin
-  pageup update URL <path|->          replace a page or site at the same URL
-  pageup auth login                   authorize locally or with a headless device code
-  pageup init [--endpoint URL]        create this device's key pair
-  pageup keys add --name NAME PUBKEY  authorize another device
-  pageup keys list                    list authorized devices
-  pageup keys revoke KEY_ID           revoke a device
-  pageup whoami                       show the active credential
-  pageup doctor                       verify server and authentication
-  pageup skill show                   print the embedded $pages skill
-  pageup skill install                add $pages to this agent harness
-  pageup public-key                   print this device's public key
-  pageup version                      print the CLI version
+  pageup-whagons <file.html|site-directory>    upload in one command
+  pageup-whagons -                            upload HTML from stdin
+  pageup-whagons update URL <path|->          replace a page or site at the same URL
+  pageup-whagons auth login                   authorize locally or with a headless device code
+  pageup-whagons init [--endpoint URL]        create this device's key pair
+  pageup-whagons keys add --name NAME PUBKEY  authorize another device
+  pageup-whagons keys list                    list authorized devices
+  pageup-whagons keys revoke KEY_ID           revoke a device
+  pageup-whagons whoami                       show the active credential
+  pageup-whagons doctor                       verify server and authentication
+  pageup-whagons skill show                   print the embedded $pages skill
+  pageup-whagons skill install                add $pages to this agent harness
+  pageup-whagons public-key                   print this device's public key
+  pageup-whagons version                      print the CLI version
 
 Upload options (place before the file):
   --json  emit a machine-readable result
   --open  open the resulting URL
 
 Update options (place before the URL):
-  pageup update --json URL file.html  emit revision and update state as JSON
-  pageup update --open UUID file.html update by id and open the page
+  pageup-whagons update --json URL file.html  emit revision and update state as JSON
+  pageup-whagons update --open UUID file.html update by id and open the page
 
 HTML site directories:
   Include index.html at the root and up to 100 .html files total.
@@ -725,8 +744,8 @@ HTML site directories:
   images and other assets must use external URLs.
 
 Skill installation:
-  pageup skill install                         auto-detect Codex or ~/.agents
-  pageup skill install --harness project       install into ./.agents/skills
-  pageup skill install --target /skills/root   install for any other harness
+  pageup-whagons skill install                         auto-detect Codex or ~/.agents
+  pageup-whagons skill install --harness project       install into ./.agents/skills
+  pageup-whagons skill install --target /skills/root   install for any other harness
   Add --force to update an existing embedded $pages skill.`)
 }

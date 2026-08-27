@@ -9,7 +9,7 @@ Use Pageup to turn HTML into an unlisted, shareable URL. A single standalone HTM
 
 ## Install and authenticate
 
-If `pageup` is not installed, install the Whagons build.
+If `pageup-whagons` is not installed, install the Whagons build.
 
 macOS or Linux:
 
@@ -26,11 +26,11 @@ irm https://pageup.whagons.com/install.ps1 | iex
 Authorize the device with a Google account on the Whagons developer allowlist:
 
 ```sh
-pageup auth login
-pageup doctor
+pageup-whagons auth login
+pageup-whagons doctor
 ```
 
-`pageup auth login` opens a browser. On an SSH or headless machine, use `pageup auth login --no-open`; it prints `https://pageup.whagons.com/auth` and a short device code to enter on a computer with a browser. Keep the remote command running until approval completes. The server checks the same developer allowlist used by Whagons developer mode. Pageup stores a revocable device key after login and does not retain the Google token.
+`pageup-whagons auth login` opens a browser. On an SSH or headless machine, use `pageup-whagons auth login --no-open`; it prints `https://pageup.whagons.com/auth` and a short device code to enter on a computer with a browser. Keep the remote command running until approval completes. The server checks the same developer allowlist used by Whagons developer mode. Pageup stores a revocable device key after login and does not retain the Google token.
 
 ## Build the artifact
 
@@ -47,19 +47,19 @@ Save the artifact in the workspace when it is a useful project deliverable; othe
 Confirm connectivity and authentication when the environment is unfamiliar:
 
 ```sh
-pageup doctor
+pageup-whagons doctor
 ```
 
 Upload a file:
 
 ```sh
-pageup path/to/report.html
+pageup-whagons path/to/report.html
 ```
 
 Upload a multi-page HTML directory:
 
 ```sh
-pageup path/to/site
+pageup-whagons path/to/site
 ```
 
 The directory must contain `index.html` at its root. Relative links such as `href="about.html"` work, and `docs/index.html` is available at `docs/`. The total uncompressed HTML is capped at 5 MiB.
@@ -67,26 +67,26 @@ The directory must contain `index.html` at its root. Relative links such as `hre
 Upload generated HTML from standard input:
 
 ```sh
-generate-html | pageup -
+generate-html | pageup-whagons -
 ```
 
 Use structured output when another command must consume the result:
 
 ```sh
-pageup --json path/to/report.html
+pageup-whagons --json path/to/report.html
 ```
 
 Keep an existing URL current when the user names that page or the artifact is an ongoing report:
 
 ```sh
-pageup update PAGE_URL path/to/report.html
-pageup update PAGE_URL path/to/site
-generate-html | pageup update PAGE_UUID -
+pageup-whagons update PAGE_URL path/to/report.html
+pageup-whagons update PAGE_URL path/to/site
+generate-html | pageup-whagons update PAGE_UUID -
 ```
 
-`pageup update` accepts either the full Pageup URL or its UUIDv7, replaces the HTML in place, and keeps the same page UUID. It can also convert a standalone page to a site or a site back to a standalone page; site URLs include a trailing slash so relative links resolve correctly. The key that created a page can update it; an admin key can update any page. Pages created before ownership tracking are admin-only until first updated by an admin. Use a new upload when the artifact should have a distinct URL or history boundary.
+`pageup-whagons update` accepts either the full Pageup URL or its UUIDv7, replaces the HTML in place, and keeps the same page UUID. It can also convert a standalone page to a site or a site back to a standalone page; site URLs include a trailing slash so relative links resolve correctly. The key that created a page can update it; an admin key can update any page. Pages created before ownership tracking are admin-only until first updated by an admin. Use a new upload when the artifact should have a distinct URL or history boundary.
 
-Do not print, copy, or commit `~/.config/pageup/config.json`. If authentication is missing, run `pageup auth login`. Never transfer a private key between devices.
+Do not print, copy, or commit `~/.config/pageup-whagons/config.json`. If authentication is missing, run `pageup-whagons auth login`. Never transfer a private key between devices.
 
 ## Verify and hand off
 

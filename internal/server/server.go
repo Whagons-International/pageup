@@ -642,8 +642,8 @@ const landingHTML = `<!doctype html>
   <h1>pageup<span class="dot">.</span></h1>
   <p>Shareable, unlisted HTML pages for the Whagons team.</p>
   <div class="installers">
-    <div class="installer" data-platform="unix"><strong>macOS / Linux</strong><code>curl -fsSL {{.URL}}/install.sh | sh<br>pageup auth login</code></div>
-    <div class="installer" data-platform="windows"><strong>Windows PowerShell</strong><code>irm {{.URL}}/install.ps1 | iex<br>pageup auth login</code></div>
+    <div class="installer" data-platform="unix"><strong>macOS / Linux</strong><code>curl -fsSL {{.URL}}/install.sh | sh<br>pageup-whagons auth login</code></div>
+    <div class="installer" data-platform="windows"><strong>Windows PowerShell</strong><code>irm {{.URL}}/install.ps1 | iex<br>pageup-whagons auth login</code></div>
   </div>
 </main>
 <script>

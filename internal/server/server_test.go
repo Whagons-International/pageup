@@ -237,9 +237,9 @@ func TestInstallersCoverWindowsAndUnix(t *testing.T) {
 		path     string
 		expected []string
 	}{
-		{"/install.sh", []string{"mingw*|msys*|cygwin*|windows_nt", "os=windows; suffix=.exe", "pageup-$os-$arch$suffix", "$HOME/bin/pageup.exe"}},
-		{"/install.ps1", []string{"pageup-windows-$Arch.exe", "Programs\\pageup", "pageup auth login"}},
-		{"/", []string{"macOS / Linux", "Windows PowerShell", "/install.ps1 | iex", "data-platform=\"windows\""}},
+		{"/install.sh", []string{"mingw*|msys*|cygwin*|windows_nt", "os=windows; suffix=.exe", "pageup-$os-$arch$suffix", "$HOME/bin/pageup-whagons.exe", "$HOME/.local/bin/pageup-whagons", "pageup-whagons auth login"}},
+		{"/install.ps1", []string{"pageup-windows-$Arch.exe", "Programs\\pageup-whagons", "pageup-whagons.exe", "pageup-whagons auth login"}},
+		{"/", []string{"macOS / Linux", "Windows PowerShell", "/install.ps1 | iex", "pageup-whagons auth login", "data-platform=\"windows\""}},
 	}
 	for _, test := range tests {
 		response, err := http.Get(environment.server.URL + test.path)
