@@ -9,17 +9,27 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws/ratelimit"
+	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/smithy-go"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 )
 
-const maxStoredObjectBytes = 8 << 20
+const (
+	maxStoredObjectBytes = 8 << 20
+	// tg-s3 answers 503 SlowDown with Telegram's flood-wait in Retry-After, so
+	// S3 requests retry patiently instead of failing after the SDK default.
+	s3MaxAttempts   = 8
+	s3MaxRetryDelay = 30 * time.Second
+)
 
 type storedObject struct {
 	Body         []byte
@@ -139,6 +149,16 @@ func newS3ObjectStore(config S3Config) (*s3ObjectStore, error) {
 		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(config.AccessKeyID, config.SecretAccessKey, "")),
 		awsconfig.WithRequestChecksumCalculation(aws.RequestChecksumCalculationWhenRequired),
 		awsconfig.WithResponseChecksumValidation(aws.ResponseChecksumValidationWhenRequired),
+		awsconfig.WithRetryer(func() aws.Retryer {
+			return retry.NewStandard(func(options *retry.StandardOptions) {
+				options.MaxAttempts = s3MaxAttempts
+				options.MaxBackoff = s3MaxRetryDelay
+				options.Backoff = retryAfterBackoff{fallback: retry.NewExponentialJitterBackoff(s3MaxRetryDelay)}
+				// Throttling is expected under Telegram's limits; a client-side
+				// retry quota would turn it into failed uploads.
+				options.RateLimiter = ratelimit.None
+			})
+		}),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("configure S3 storage: %w", err)
@@ -333,6 +353,22 @@ func (reader *s3StreamReader) Close() error {
 	err := reader.body.Close()
 	reader.body = nil
 	return err
+}
+
+// retryAfterBackoff waits as long as the server's Retry-After asks, capped at
+// s3MaxRetryDelay, and otherwise falls back to exponential jitter.
+type retryAfterBackoff struct {
+	fallback retry.BackoffDelayer
+}
+
+func (backoff retryAfterBackoff) BackoffDelay(attempt int, err error) (time.Duration, error) {
+	var responseError *smithyhttp.ResponseError
+	if errors.As(err, &responseError) && responseError.Response != nil {
+		if seconds, parseErr := strconv.Atoi(responseError.Response.Header.Get("Retry-After")); parseErr == nil && seconds > 0 {
+			return min(time.Duration(seconds)*time.Second, s3MaxRetryDelay), nil
+		}
+	}
+	return backoff.fallback.BackoffDelay(attempt, err)
 }
 
 func s3NotFound(err error) bool {

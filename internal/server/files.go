@@ -29,8 +29,8 @@ const (
 	// Telegram limit, with room for server-side encryption overhead.
 	defaultS3FileChunkBytes int64 = 16 << 20
 	// fileChunkUploads bounds concurrent chunk writes so large uploads finish
-	// within proxy timeouts without flooding the Telegram-backed store.
-	fileChunkUploads    = 3
+	// within proxy timeouts without tripping Telegram's flood control.
+	fileChunkUploads    = 2
 	fileMetadataVersion = 1
 	maxFileNameBytes    = 255
 	// fileTransferTimeout replaces the server's short read and write timeouts

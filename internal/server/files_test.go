@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/desarso/pageup/internal/api"
 	pageclient "github.com/desarso/pageup/internal/client"
@@ -421,6 +422,8 @@ type fakeS3 struct {
 	mu        sync.Mutex
 	objects   map[string][]byte
 	maxObject int
+	// throttle answers this many PUTs with tg-s3's 503 SlowDown first.
+	throttle int
 }
 
 func newFakeS3(t *testing.T) (*fakeS3, *s3ObjectStore) {
@@ -472,6 +475,14 @@ func (fake *fakeS3) ServeHTTP(writer http.ResponseWriter, request *http.Request)
 		writer.Write(body)
 	case http.MethodPut:
 		body, _ := io.ReadAll(request.Body)
+		if fake.throttle > 0 {
+			fake.throttle--
+			writer.Header().Set("Content-Type", "application/xml")
+			writer.Header().Set("Retry-After", "1")
+			writer.WriteHeader(http.StatusServiceUnavailable)
+			io.WriteString(writer, `<Error><Code>SlowDown</Code><Message>Please reduce your request rate.</Message></Error>`)
+			return
+		}
 		if fake.maxObject > 0 && len(body) > fake.maxObject {
 			writer.Header().Set("Content-Type", "application/xml")
 			writer.WriteHeader(http.StatusBadRequest)
@@ -688,5 +699,20 @@ func TestS3StorageDefaultsToChunkedFiles(t *testing.T) {
 	}
 	if disk.config.FileChunkBytes != 0 {
 		t.Fatalf("filesystem chunk size = %d", disk.config.FileChunkBytes)
+	}
+}
+
+func TestS3UploadsWaitOutTelegramRateLimits(t *testing.T) {
+	fake, store := newFakeS3(t)
+	fake.throttle = 4
+	started := time.Now()
+	if err := store.PutStream(context.Background(), "files/throttled.blob", strings.NewReader("patient"), 7, "text/plain"); err != nil {
+		t.Fatalf("throttled upload: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed < 4*time.Second {
+		t.Fatalf("upload ignored Retry-After: finished in %v", elapsed)
+	}
+	if object, err := store.Get("files/throttled.blob"); err != nil || string(object.Body) != "patient" {
+		t.Fatalf("stored object = %q, %v", object.Body, err)
 	}
 }
