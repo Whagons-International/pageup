@@ -37,6 +37,12 @@ func newTestEnvironment(t *testing.T, maxBytes int64) testEnvironment {
 }
 
 func newTestEnvironmentWithAuthorizer(t *testing.T, maxBytes int64, authorizer DeveloperAuthorizer) testEnvironment {
+	return newTestEnvironmentWithConfig(t, Config{MaxPageBytes: maxBytes, Authorizer: authorizer})
+}
+
+// newTestEnvironmentWithConfig fills in storage, keys, and logging around the
+// limits and collaborators set in config.
+func newTestEnvironmentWithConfig(t *testing.T, config Config) testEnvironment {
 	t.Helper()
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -52,27 +58,24 @@ func newTestEnvironmentWithAuthorizer(t *testing.T, maxBytes int64, authorizer D
 	if err != nil {
 		t.Fatal(err)
 	}
-	service, err := New(Config{
-		DataDir:       dataDir,
-		BootstrapKeys: string(bootstrap),
-		MaxPageBytes:  maxBytes,
-		Version:       "test",
-		Now:           time.Now,
-		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Authorizer:    authorizer,
-	})
+	config.DataDir = dataDir
+	config.BootstrapKeys = string(bootstrap)
+	config.Version = "test"
+	config.Now = time.Now
+	config.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	service, err := New(config)
 	if err != nil {
 		t.Fatal(err)
 	}
 	httpServer := httptest.NewServer(service.Handler())
-	config := pageclient.Config{
+	clientConfig := pageclient.Config{
 		Version:    1,
 		Endpoint:   httpServer.URL,
 		KeyID:      protocol.KeyID(publicKey),
 		PrivateKey: protocol.EncodePrivateKey(privateKey),
 		Name:       "test admin",
 	}
-	return testEnvironment{server: httpServer, privateKey: privateKey, config: config, dataDir: dataDir, now: now}
+	return testEnvironment{server: httpServer, privateKey: privateKey, config: clientConfig, dataDir: dataDir, now: now}
 }
 
 type fakeDeveloperAuthorizer struct {

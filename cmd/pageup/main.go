@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -25,6 +26,10 @@ import (
 )
 
 var version = "dev"
+
+// fileTransferTimeout bounds a whole file upload, which can be far larger
+// than an HTML page.
+const fileTransferTimeout = 30 * time.Minute
 
 func main() {
 	if err := configureWhagonsExecutableConfig(os.Args[0]); err != nil {
@@ -66,6 +71,10 @@ func run(args []string) error {
 		return runUpload(args[1:])
 	case "update":
 		return runUpdate(args[1:])
+	case "file", "files":
+		return runFile(args[1:])
+	case "delete":
+		return runDelete(args[1:])
 	case "keys":
 		return runKeys(args[1:])
 	case "whoami":
@@ -260,7 +269,12 @@ func runUpload(args []string) error {
 		return err
 	}
 	if flags.NArg() != 1 {
-		return errors.New("usage: pageup-whagons [--json] [--open] <file.html|site-directory|->")
+		return errors.New("usage: pageup-whagons [--json] [--open] <file.html|site-directory|file|->; use 'pageup-whagons file' for several files")
+	}
+	if hosted, err := isHostedFile(flags.Arg(0)); err != nil {
+		return err
+	} else if hosted {
+		return uploadFiles(flags.Args(), "", *jsonOutput, *openPage)
 	}
 	artifact, err := readArtifact(flags.Arg(0))
 	if err != nil {
@@ -299,19 +313,35 @@ func runUpdate(args []string) error {
 	flags.SetOutput(io.Discard)
 	jsonOutput := flags.Bool("json", false, "print JSON")
 	openPage := flags.Bool("open", false, "open the updated page")
+	name := flags.String("name", "", "rename a hosted file")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 2 {
-		return errors.New("usage: pageup-whagons update [--json] [--open] <URL-or-UUID> <file.html|site-directory|->")
+		return errors.New("usage: pageup-whagons update [--json] [--open] [--name NAME] <URL-or-UUID> <file.html|site-directory|file|->")
 	}
 	pageup, config, err := configuredClient()
 	if err != nil {
 		return err
 	}
-	id, err := parsePageID(flags.Arg(0), config.Endpoint)
+	id, kind, err := parseTarget(flags.Arg(0), config.Endpoint)
 	if err != nil {
 		return err
+	}
+	if kind == targetAny {
+		hosted, err := isHostedFile(flags.Arg(1))
+		if err != nil {
+			return err
+		}
+		if hosted {
+			kind = targetFile
+		}
+	}
+	if kind == targetFile {
+		return updateFile(pageup, id, flags.Arg(1), *name, *jsonOutput, *openPage)
+	}
+	if *name != "" {
+		return errors.New("--name applies only to hosted files")
 	}
 	artifact, err := readArtifact(flags.Arg(1))
 	if err != nil {
@@ -338,6 +368,213 @@ func runUpdate(args []string) error {
 	if *openPage {
 		return openURL(result.URL)
 	}
+	return nil
+}
+
+func runFile(args []string) error {
+	flags := flag.NewFlagSet("file", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	jsonOutput := flags.Bool("json", false, "print JSON")
+	openFile := flags.Bool("open", false, "open the uploaded files")
+	name := flags.String("name", "", "published file name")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() == 0 {
+		return errors.New("usage: pageup-whagons file [--json] [--open] [--name NAME] <path...|->")
+	}
+	if *name != "" && flags.NArg() != 1 {
+		return errors.New("--name applies to a single file")
+	}
+	return uploadFiles(flags.Args(), *name, *jsonOutput, *openFile)
+}
+
+func uploadFiles(paths []string, name string, jsonOutput, openFiles bool) error {
+	pageup, _, err := configuredClient()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), fileTransferTimeout)
+	defer cancel()
+	results := make([]api.FileResponse, 0, len(paths))
+	for _, path := range paths {
+		result, err := uploadFile(ctx, pageup, path, name)
+		if err != nil {
+			if jsonOutput && len(results) > 0 {
+				printJSON(results)
+			}
+			return fmt.Errorf("%s: %w", path, err)
+		}
+		if !jsonOutput {
+			fmt.Println(result.URL)
+		}
+		results = append(results, result)
+	}
+	if jsonOutput {
+		var err error
+		if len(results) == 1 {
+			err = printJSON(results[0])
+		} else {
+			err = printJSON(results)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	if openFiles {
+		for _, result := range results {
+			if err := openURL(result.URL); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func uploadFile(ctx context.Context, pageup *client.Client, path, name string) (api.FileResponse, error) {
+	if name == "" {
+		if path == "-" {
+			return api.FileResponse{}, errors.New("--name is required when sharing standard input")
+		}
+		name = filepath.Base(path)
+	}
+	content, closeContent, err := openFileContent(path)
+	if err != nil {
+		return api.FileResponse{}, err
+	}
+	defer closeContent()
+	return pageup.UploadFile(ctx, name, content)
+}
+
+func updateFile(pageup *client.Client, id, path, name string, jsonOutput, openFile bool) error {
+	content, closeContent, err := openFileContent(path)
+	if err != nil {
+		return err
+	}
+	defer closeContent()
+	ctx, cancel := context.WithTimeout(context.Background(), fileTransferTimeout)
+	defer cancel()
+	result, err := pageup.UpdateFile(ctx, id, name, content)
+	if err != nil {
+		return err
+	}
+	if jsonOutput {
+		if err := printJSON(result); err != nil {
+			return err
+		}
+	} else {
+		fmt.Println(result.URL)
+	}
+	if openFile {
+		return openURL(result.URL)
+	}
+	return nil
+}
+
+// openFileContent opens a file to share. Standard input is spooled to a
+// temporary file because uploads are hashed before they are sent.
+func openFileContent(path string) (*os.File, func(), error) {
+	if path == "-" {
+		temporary, err := os.CreateTemp("", "pageup-stdin-*")
+		if err != nil {
+			return nil, nil, err
+		}
+		discard := func() {
+			temporary.Close()
+			os.Remove(temporary.Name())
+		}
+		if _, err := io.Copy(temporary, os.Stdin); err != nil {
+			discard()
+			return nil, nil, err
+		}
+		if _, err := temporary.Seek(0, io.SeekStart); err != nil {
+			discard()
+			return nil, nil, err
+		}
+		return temporary, discard, nil
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	if info.IsDir() {
+		return nil, nil, errors.New("directories cannot be shared as files; archive it first, or publish an HTML site with 'pageup-whagons DIRECTORY'")
+	}
+	if !info.Mode().IsRegular() {
+		return nil, nil, errors.New("only regular files can be shared")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	return file, func() { file.Close() }, nil
+}
+
+// isHostedFile reports whether path should be shared as a file rather than
+// published as an HTML page. Files without an extension are sniffed so HTML
+// written to a temporary file still becomes a page.
+func isHostedFile(path string) (bool, error) {
+	if path == "-" {
+		return false, nil
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return false, err
+	}
+	if info.IsDir() {
+		return false, nil
+	}
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".html", ".htm", ".xhtml":
+		return false, nil
+	case "":
+		file, err := os.Open(path)
+		if err != nil {
+			return false, err
+		}
+		defer file.Close()
+		head := make([]byte, 512)
+		count, err := io.ReadFull(file, head)
+		if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
+			return false, err
+		}
+		return !strings.HasPrefix(http.DetectContentType(head[:count]), "text/html"), nil
+	default:
+		return true, nil
+	}
+}
+
+func runDelete(args []string) error {
+	flags := flag.NewFlagSet("delete", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	jsonOutput := flags.Bool("json", false, "print JSON")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 1 {
+		return errors.New("usage: pageup-whagons delete [--json] <file-URL-or-UUID>")
+	}
+	pageup, config, err := configuredClient()
+	if err != nil {
+		return err
+	}
+	id, kind, err := parseTarget(flags.Arg(0), config.Endpoint)
+	if err != nil {
+		return err
+	}
+	if kind == targetPage {
+		return errors.New("only hosted files can be deleted")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	result, err := pageup.DeleteFile(ctx, id)
+	if err != nil {
+		return err
+	}
+	if *jsonOutput {
+		return printJSON(result)
+	}
+	fmt.Printf("Deleted %s\n", result.URL)
 	return nil
 }
 
@@ -658,27 +895,43 @@ func readArtifact(path string) (uploadArtifact, error) {
 	return uploadArtifact{body: body}, err
 }
 
-func parsePageID(value, endpoint string) (string, error) {
+type targetKind int
+
+const (
+	// targetAny is a bare UUIDv7, which may name either a page or a file.
+	targetAny targetKind = iota
+	targetPage
+	targetFile
+)
+
+func parseTarget(value, endpoint string) (string, targetKind, error) {
 	value = strings.TrimSpace(value)
 	if protocol.IsUUIDv7(value) {
-		return value, nil
+		return value, targetAny, nil
 	}
-	pageURL, err := url.Parse(value)
-	if err != nil || !pageURL.IsAbs() || pageURL.User != nil {
-		return "", errors.New("page must be a UUIDv7 or a Pageup URL")
+	targetURL, err := url.Parse(value)
+	if err != nil || !targetURL.IsAbs() || targetURL.User != nil {
+		return "", targetAny, errors.New("target must be a UUIDv7 or a Pageup URL")
 	}
 	endpointURL, err := url.Parse(endpoint)
 	if err != nil {
-		return "", errors.New("configured Pageup endpoint is invalid")
+		return "", targetAny, errors.New("configured Pageup endpoint is invalid")
 	}
-	if !strings.EqualFold(pageURL.Scheme, endpointURL.Scheme) || !strings.EqualFold(pageURL.Host, endpointURL.Host) {
-		return "", fmt.Errorf("page URL must belong to %s", strings.TrimRight(endpoint, "/"))
+	if !strings.EqualFold(targetURL.Scheme, endpointURL.Scheme) || !strings.EqualFold(targetURL.Host, endpointURL.Host) {
+		return "", targetAny, fmt.Errorf("Pageup URL must belong to %s", strings.TrimRight(endpoint, "/"))
 	}
-	id := strings.Trim(pageURL.Path, "/")
+	if rest, ok := strings.CutPrefix(targetURL.Path, "/f/"); ok {
+		id, _, _ := strings.Cut(rest, "/")
+		if !protocol.IsUUIDv7(id) {
+			return "", targetAny, errors.New("Pageup file URL does not contain a valid UUIDv7 file id")
+		}
+		return id, targetFile, nil
+	}
+	id := strings.Trim(targetURL.Path, "/")
 	if !protocol.IsUUIDv7(id) {
-		return "", errors.New("Pageup URL does not contain a valid UUIDv7 page id")
+		return "", targetAny, errors.New("Pageup URL does not contain a valid UUIDv7 page id")
 	}
-	return id, nil
+	return id, targetPage, nil
 }
 
 func openURL(value string) error {
@@ -717,7 +970,10 @@ func printUsage(writer io.Writer) {
 Usage:
   pageup-whagons <file.html|site-directory>    upload in one command
   pageup-whagons -                            upload HTML from stdin
-  pageup-whagons update URL <path|->          replace a page or site at the same URL
+  pageup-whagons <file>                       share any other file (image, PDF, log, archive)
+  pageup-whagons file <path...|->             share one or more files, one URL per line
+  pageup-whagons update URL <path|->          replace a page, site, or file at the same URL
+  pageup-whagons delete FILE_URL              delete a shared file
   pageup-whagons auth login                   authorize locally or with a headless device code
   pageup-whagons init [--endpoint URL]        create this device's key pair
   pageup-whagons keys add --name NAME PUBKEY  authorize another device
@@ -741,7 +997,14 @@ Update options (place before the URL):
 HTML site directories:
   Include index.html at the root and up to 100 .html files total.
   Nested folders are preserved. CSS and JavaScript must remain inline;
-  images and other assets must use external URLs.
+  share images and other assets as files and reference their URLs.
+
+File sharing:
+  Files are public but unlisted at /f/<id>/<name>. Images, PDFs, audio,
+  video, text, and JSON open in the browser; other types download.
+  Add ?download to a file URL to force a download.
+  pageup-whagons file --name out.log -          share stdin under a file name
+  pageup-whagons update --name v2.pdf URL f.pdf replace a file and rename it
 
 Skill installation:
   pageup-whagons skill install                         auto-detect Codex or ~/.agents

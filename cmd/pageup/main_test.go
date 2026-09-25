@@ -101,40 +101,84 @@ func TestResolveProjectSkillRoot(t *testing.T) {
 	}
 }
 
-func TestParsePageID(t *testing.T) {
+func TestParseTarget(t *testing.T) {
 	id := "019f620a-226d-7981-88d3-83da3b460b6c"
 	endpoint := "https://pageup.whagons.com"
-	for _, value := range []string{
-		id,
-		endpoint + "/" + id,
-		endpoint + "/" + id + "/",
-		endpoint + "/" + id + "?preview=latest#top",
+	for value, expected := range map[string]targetKind{
+		id:                                     targetAny,
+		endpoint + "/" + id:                    targetPage,
+		endpoint + "/" + id + "/":              targetPage,
+		endpoint + "/" + id + "?preview=1#top": targetPage,
+		endpoint + "/f/" + id:                  targetFile,
+		endpoint + "/f/" + id + "/report.pdf":  targetFile,
+		endpoint + "/f/" + id + "/a%20b.png":   targetFile,
 	} {
-		parsed, err := parsePageID(value, endpoint)
+		parsed, kind, err := parseTarget(value, endpoint)
 		if err != nil {
-			t.Fatalf("parsePageID(%q): %v", value, err)
+			t.Fatalf("parseTarget(%q): %v", value, err)
 		}
-		if parsed != id {
-			t.Fatalf("parsePageID(%q) = %q", value, parsed)
+		if parsed != id || kind != expected {
+			t.Fatalf("parseTarget(%q) = %q, %d", value, parsed, kind)
 		}
 	}
 
 	for _, value := range []string{
 		"not-a-page",
 		"https://example.com/" + id,
+		"https://example.com/f/" + id + "/report.pdf",
 		endpoint + "/" + id + "/extra",
+		endpoint + "/f/not-a-file/report.pdf",
 		strings.ToUpper(id),
 	} {
-		if _, err := parsePageID(value, endpoint); err == nil {
-			t.Fatalf("parsePageID(%q) unexpectedly succeeded", value)
+		if _, _, err := parseTarget(value, endpoint); err == nil {
+			t.Fatalf("parseTarget(%q) unexpectedly succeeded", value)
 		}
+	}
+}
+
+func TestIsHostedFileRoutesNonHTMLFiles(t *testing.T) {
+	root := t.TempDir()
+	cases := map[string]struct {
+		contents string
+		hosted   bool
+	}{
+		"report.html": {"<h1>report</h1>", false},
+		"legacy.HTM":  {"<h1>legacy</h1>", false},
+		"screen.png":  {"\x89PNG\r\n\x1a\n", true},
+		"notes.txt":   {"<h1>plain text anyway</h1>", true},
+		"tmp-html":    {"<!doctype html><title>x</title>", false},
+		"tmp-log":     {"build succeeded\n", true},
+		"empty-noext": {"", true},
+		"archive.zip": {"PK\x03\x04", true},
+	}
+	for name, test := range cases {
+		path := filepath.Join(root, name)
+		if err := os.WriteFile(path, []byte(test.contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		hosted, err := isHostedFile(path)
+		if err != nil {
+			t.Fatalf("isHostedFile(%q): %v", name, err)
+		}
+		if hosted != test.hosted {
+			t.Fatalf("isHostedFile(%q) = %v", name, hosted)
+		}
+	}
+	if hosted, err := isHostedFile(root); err != nil || hosted {
+		t.Fatalf("directory hosted = %v, %v", hosted, err)
+	}
+	if hosted, err := isHostedFile("-"); err != nil || hosted {
+		t.Fatalf("stdin hosted = %v, %v", hosted, err)
+	}
+	if _, _, err := openFileContent(root); err == nil || !strings.Contains(err.Error(), "archive it first") {
+		t.Fatalf("directory file content error = %v", err)
 	}
 }
 
 func TestHelpExplainsUpdatesAndEmbeddedSkill(t *testing.T) {
 	var output strings.Builder
 	printUsage(&output)
-	for _, expected := range []string{"pageup-whagons update URL", "pageup-whagons skill install", "same URL", "site-directory", "100 .html files"} {
+	for _, expected := range []string{"pageup-whagons update URL", "pageup-whagons skill install", "same URL", "site-directory", "100 .html files", "pageup-whagons file <path...|->", "pageup-whagons delete FILE_URL", "?download"} {
 		if !strings.Contains(output.String(), expected) {
 			t.Fatalf("help is missing %q", expected)
 		}

@@ -22,7 +22,10 @@ const (
 	HeaderTimestamp = "X-Pageup-Timestamp"
 	HeaderNonce     = "X-Pageup-Nonce"
 	HeaderSignature = "X-Pageup-Signature"
-	SignaturePrefix = "pageup-signature-v1"
+	// HeaderContentSHA256 carries the signed body hash for streamed uploads so
+	// the server can authenticate a request before reading its body.
+	HeaderContentSHA256 = "X-Pageup-Content-SHA256"
+	SignaturePrefix     = "pageup-signature-v1"
 )
 
 func KeyID(publicKey ed25519.PublicKey) string {
@@ -89,28 +92,42 @@ func BodyHash(body []byte) string {
 }
 
 func Canonical(method, path string, timestamp int64, nonce string, body []byte) []byte {
+	return CanonicalHash(method, path, timestamp, nonce, BodyHash(body))
+}
+
+// CanonicalHash builds the same signing input as Canonical from a body hash,
+// for streamed bodies whose bytes are not held in memory.
+func CanonicalHash(method, path string, timestamp int64, nonce, bodyHash string) []byte {
 	return []byte(strings.Join([]string{
 		SignaturePrefix,
 		strings.ToUpper(method),
 		path,
 		strconv.FormatInt(timestamp, 10),
 		nonce,
-		BodyHash(body),
+		bodyHash,
 	}, "\n"))
 }
 
 func Sign(privateKey ed25519.PrivateKey, method, path string, timestamp int64, nonce string, body []byte) string {
-	signature := ed25519.Sign(privateKey, Canonical(method, path, timestamp, nonce, body))
+	return SignHash(privateKey, method, path, timestamp, nonce, BodyHash(body))
+}
+
+func SignHash(privateKey ed25519.PrivateKey, method, path string, timestamp int64, nonce, bodyHash string) string {
+	signature := ed25519.Sign(privateKey, CanonicalHash(method, path, timestamp, nonce, bodyHash))
 	return base64.RawURLEncoding.EncodeToString(signature)
 }
 
 func SignRequest(request *http.Request, privateKey ed25519.PrivateKey, nonce string, body []byte, now time.Time) {
+	SignRequestHash(request, privateKey, nonce, BodyHash(body), now)
+}
+
+func SignRequestHash(request *http.Request, privateKey ed25519.PrivateKey, nonce, bodyHash string, now time.Time) {
 	publicKey := privateKey.Public().(ed25519.PublicKey)
 	timestamp := now.Unix()
 	request.Header.Set(HeaderKeyID, KeyID(publicKey))
 	request.Header.Set(HeaderTimestamp, strconv.FormatInt(timestamp, 10))
 	request.Header.Set(HeaderNonce, nonce)
-	request.Header.Set(HeaderSignature, Sign(privateKey, request.Method, request.URL.EscapedPath(), timestamp, nonce, body))
+	request.Header.Set(HeaderSignature, SignHash(privateKey, request.Method, request.URL.EscapedPath(), timestamp, nonce, bodyHash))
 }
 
 func DecodeSignature(value string) ([]byte, error) {

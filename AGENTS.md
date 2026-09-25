@@ -27,6 +27,18 @@ pageup update <URL-or-UUID> path/to/site
 
 The page's creator key or an admin key may update it. `pageup update <URL-or-UUID> -` accepts HTML from standard input.
 
+# Sharing a file
+
+To give a human or another agent a link to any other file, such as a screenshot, image, PDF, log, data export, archive, or recording, use:
+
+```sh
+pageup file path/to/screenshot.png
+pageup file build/report.pdf logs/run.log
+some-command 2>&1 | pageup file --name run.log -
+```
+
+A single non-HTML path also works as `pageup path/to/file`. Each file gets a public-but-unlisted URL at `/f/<uuid>/<name>`. Images, PDFs, media, text, and JSON open in the browser; other types download. Reference shared image URLs from HTML pages instead of embedding assets. `pageup update <file-URL> path` replaces a file at the same URL (`--name` renames it), and `pageup delete <file-URL>` removes it. Never share secrets, `.env` files, or unredacted logs.
+
 Run `pageup doctor` if credentials or connectivity are in doubt. Never print, commit, or copy the private key from `~/.config/pageup/config.json`.
 
 If Pageup is missing, install it from `https://pageup.whagons.com/install.sh` on macOS or Linux, or `https://pageup.whagons.com/install.ps1` on Windows. Run `pageup auth login` to authorize the device through the Whagons Google developer allowlist.

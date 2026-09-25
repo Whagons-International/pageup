@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,8 +24,11 @@ type Client struct {
 	endpoint   *url.URL
 	privateKey ed25519.PrivateKey
 	httpClient *http.Client
-	now        func() time.Time
-	userAgent  string
+	// transferClient has no overall timeout because file transfers can run
+	// long; callers bound them with a context instead.
+	transferClient *http.Client
+	now            func() time.Time
+	userAgent      string
 }
 
 type APIError struct {
@@ -42,11 +47,12 @@ func New(config Config, version string) (*Client, error) {
 	endpoint, _ := url.Parse(strings.TrimRight(config.Endpoint, "/"))
 	privateKey, _ := config.Private()
 	return &Client{
-		endpoint:   endpoint,
-		privateKey: privateKey,
-		httpClient: &http.Client{Timeout: 45 * time.Second},
-		now:        time.Now,
-		userAgent:  "pageup/" + version,
+		endpoint:       endpoint,
+		privateKey:     privateKey,
+		httpClient:     &http.Client{Timeout: 45 * time.Second},
+		transferClient: &http.Client{},
+		now:            time.Now,
+		userAgent:      "pageup/" + version,
 	}, nil
 }
 
@@ -77,6 +83,37 @@ func (client *Client) UpdateSite(ctx context.Context, id string, archive []byte)
 	}
 	var result api.UploadResponse
 	_, err := client.doSigned(ctx, http.MethodPut, "/api/pages/"+url.PathEscape(id), archive, sitebundle.MediaType, &result)
+	return result, err
+}
+
+// UploadFile streams content to a new hosted file published under name.
+func (client *Client) UploadFile(ctx context.Context, name string, content io.ReadSeeker) (api.FileResponse, error) {
+	var result api.FileResponse
+	err := client.doSignedStream(ctx, http.MethodPost, "/api/files/"+url.PathEscape(name), content, &result)
+	return result, err
+}
+
+// UpdateFile replaces a hosted file's content at the same URL. An empty name
+// keeps the current file name.
+func (client *Client) UpdateFile(ctx context.Context, id, name string, content io.ReadSeeker) (api.FileResponse, error) {
+	if !protocol.IsUUIDv7(id) {
+		return api.FileResponse{}, errors.New("file id must be a UUIDv7")
+	}
+	path := "/api/files/" + url.PathEscape(id)
+	if name != "" {
+		path += "/" + url.PathEscape(name)
+	}
+	var result api.FileResponse
+	err := client.doSignedStream(ctx, http.MethodPut, path, content, &result)
+	return result, err
+}
+
+func (client *Client) DeleteFile(ctx context.Context, id string) (api.FileResponse, error) {
+	if !protocol.IsUUIDv7(id) {
+		return api.FileResponse{}, errors.New("file id must be a UUIDv7")
+	}
+	var result api.FileResponse
+	_, err := client.doSigned(ctx, http.MethodDelete, "/api/files/"+url.PathEscape(id), nil, "", &result)
 	return result, err
 }
 
@@ -200,16 +237,63 @@ func (client *Client) doSigned(ctx context.Context, method, path string, body []
 	if err != nil {
 		return nonce, err
 	}
+	return nonce, decodeResponse(response, output)
+}
+
+// doSignedStream hashes content, then streams it with the hash in a signed
+// header so neither side holds the whole body in memory.
+func (client *Client) doSignedStream(ctx context.Context, method, path string, content io.ReadSeeker, output any) error {
+	hash := sha256.New()
+	size, err := io.Copy(hash, content)
+	if err != nil {
+		return err
+	}
+	if _, err := content.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	nonce, err := protocol.NewUUIDv7(client.now())
+	if err != nil {
+		return err
+	}
+	request, err := http.NewRequestWithContext(ctx, method, client.endpoint.String()+path, nil)
+	if err != nil {
+		return err
+	}
+	if size > 0 {
+		request.Body = io.NopCloser(content)
+		request.GetBody = func() (io.ReadCloser, error) {
+			if _, err := content.Seek(0, io.SeekStart); err != nil {
+				return nil, err
+			}
+			return io.NopCloser(content), nil
+		}
+		request.ContentLength = size
+		// Wait briefly for the server to accept the signature before sending
+		// a large body it would reject.
+		request.Header.Set("Expect", "100-continue")
+	}
+	bodyHash := hex.EncodeToString(hash.Sum(nil))
+	request.Header.Set("Content-Type", "application/octet-stream")
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("User-Agent", client.userAgent)
+	request.Header.Set(protocol.HeaderContentSHA256, bodyHash)
+	protocol.SignRequestHash(request, client.privateKey, nonce, bodyHash, client.now())
+	response, err := client.transferClient.Do(request)
+	if err != nil {
+		return err
+	}
+	return decodeResponse(response, output)
+}
+
+func decodeResponse(response *http.Response, output any) error {
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nonce, decodeAPIError(response)
+		return decodeAPIError(response)
 	}
 	if output != nil {
-		if err := decodeJSON(response.Body, output); err != nil {
-			return nonce, err
-		}
+		return decodeJSON(response.Body, output)
 	}
-	return nonce, nil
+	return nil
 }
 
 func decodeAPIError(response *http.Response) error {

@@ -33,6 +33,7 @@ type Config struct {
 	DownloadsDir  string
 	BootstrapKeys string
 	MaxPageBytes  int64
+	MaxFileBytes  int64
 	Version       string
 	Logger        *slog.Logger
 	Now           func() time.Time
@@ -47,6 +48,7 @@ type Server struct {
 	auth   *deviceAuthStore
 	store  objectStore
 	pages  sync.Mutex
+	files  sync.Mutex
 	nonces struct {
 		sync.Mutex
 		used map[string]time.Time
@@ -59,6 +61,9 @@ func New(config Config) (*Server, error) {
 	}
 	if config.MaxPageBytes <= 0 {
 		config.MaxPageBytes = defaultMaxPageBytes
+	}
+	if config.MaxFileBytes <= 0 {
+		config.MaxFileBytes = defaultMaxFileBytes
 	}
 	if config.Logger == nil {
 		config.Logger = slog.Default()
@@ -110,9 +115,11 @@ func (server *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/auth/device/", server.handleDeviceAuth)
 	mux.HandleFunc("/api/pages", server.handleUpload)
 	mux.HandleFunc("/api/pages/", server.handleUpdate)
+	mux.HandleFunc("/api/files/", server.handleFileAPI)
 	mux.HandleFunc("/api/keys", server.handleKeys)
 	mux.HandleFunc("/api/keys/", server.handleKey)
 	mux.HandleFunc("/api/whoami", server.handleWhoAmI)
+	mux.HandleFunc("/f/", server.handleFile)
 	mux.HandleFunc("/", server.handlePage)
 	return server.securityHeaders(server.accessLog(mux))
 }
@@ -453,6 +460,12 @@ func serveHTML(writer http.ResponseWriter, request *http.Request, name string, m
 }
 
 func (server *Server) authorize(writer http.ResponseWriter, request *http.Request, body []byte, adminOnly bool) (api.Key, string, bool) {
+	return server.authorizeHash(writer, request, protocol.BodyHash(body), adminOnly)
+}
+
+// authorizeHash verifies a request signed over bodyHash. Streamed uploads call
+// it with their declared hash before reading the body, then check the body.
+func (server *Server) authorizeHash(writer http.ResponseWriter, request *http.Request, bodyHash string, adminOnly bool) (api.Key, string, bool) {
 	fail := func(reason string) (api.Key, string, bool) {
 		server.config.Logger.Warn("authentication rejected", "reason", reason, "remote", request.RemoteAddr, "path", request.URL.Path)
 		writeError(writer, http.StatusUnauthorized, "authentication failed")
@@ -488,7 +501,7 @@ func (server *Server) authorize(writer http.ResponseWriter, request *http.Reques
 	if err != nil {
 		return fail("invalid signature encoding")
 	}
-	canonical := protocol.Canonical(request.Method, request.URL.EscapedPath(), timestamp, nonce, body)
+	canonical := protocol.CanonicalHash(request.Method, request.URL.EscapedPath(), timestamp, nonce, bodyHash)
 	if !ed25519.Verify(publicKey, canonical, signature) {
 		return fail("invalid signature")
 	}
@@ -640,7 +653,7 @@ const landingHTML = `<!doctype html>
 </style>
 <main>
   <h1>pageup<span class="dot">.</span></h1>
-  <p>Shareable, unlisted HTML pages for the Whagons team.</p>
+  <p>Shareable, unlisted HTML pages and files for the Whagons team.</p>
   <div class="installers">
     <div class="installer" data-platform="unix"><strong>macOS / Linux</strong><code>curl -fsSL {{.URL}}/install.sh | sh<br>pageup-whagons auth login</code></div>
     <div class="installer" data-platform="windows"><strong>Windows PowerShell</strong><code>irm {{.URL}}/install.ps1 | iex<br>pageup-whagons auth login</code></div>

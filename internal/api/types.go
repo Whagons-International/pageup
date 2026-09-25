@@ -38,6 +38,19 @@ type UploadResponse struct {
 	Revision uint64 `json:"revision"`
 }
 
+type FileResponse struct {
+	ID          string `json:"id"`
+	URL         string `json:"url"`
+	Name        string `json:"name"`
+	ContentType string `json:"content_type"`
+	Size        int64  `json:"size"`
+	SHA256      string `json:"sha256"`
+	Created     bool   `json:"created"`
+	Updated     bool   `json:"updated"`
+	Deleted     bool   `json:"deleted,omitempty"`
+	Revision    uint64 `json:"revision"`
+}
+
 type Key struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`

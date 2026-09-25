@@ -27,12 +27,22 @@ func main() {
 		}
 		maxPageBytes = parsed
 	}
+	maxFileBytes := int64(100 << 20)
+	if value := os.Getenv("PAGEUP_MAX_FILE_BYTES"); value != "" {
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || parsed <= 0 {
+			logger.Error("invalid PAGEUP_MAX_FILE_BYTES", "value", value)
+			os.Exit(1)
+		}
+		maxFileBytes = parsed
+	}
 	service, err := pageupserver.New(pageupserver.Config{
 		DataDir:       envOr("PAGEUP_DATA_DIR", "/data"),
 		PublicURL:     os.Getenv("PAGEUP_PUBLIC_URL"),
 		DownloadsDir:  envOr("PAGEUP_DOWNLOADS_DIR", "/app/downloads"),
 		BootstrapKeys: os.Getenv("PAGEUP_BOOTSTRAP_KEYS"),
 		MaxPageBytes:  maxPageBytes,
+		MaxFileBytes:  maxFileBytes,
 		Version:       version,
 		Logger:        logger,
 		Authorizer: pageupserver.NewWhagonsDeveloperAuthorizer(

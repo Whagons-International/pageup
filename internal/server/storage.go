@@ -30,6 +30,10 @@ type objectStore interface {
 	Get(string) (storedObject, error)
 	Put(string, []byte, bool) (bool, error)
 	Delete(string) error
+	// PutStream and OpenStream move hosted files without buffering them in
+	// memory. OpenStream receives the size recorded in file metadata.
+	PutStream(context.Context, string, io.ReadSeeker, int64, string) error
+	OpenStream(context.Context, string, int64) (io.ReadSeekCloser, error)
 }
 
 type filesystemObjectStore struct {
@@ -85,6 +89,18 @@ func (store *filesystemObjectStore) Delete(key string) error {
 	return err
 }
 
+func (store *filesystemObjectStore) PutStream(_ context.Context, key string, body io.ReadSeeker, _ int64, _ string) error {
+	path := store.path(key)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	return writeAtomicStream(path, body, 0o600)
+}
+
+func (store *filesystemObjectStore) OpenStream(_ context.Context, key string, _ int64) (io.ReadSeekCloser, error) {
+	return os.Open(store.path(key))
+}
+
 type S3Config struct {
 	Endpoint        string
 	Region          string
@@ -122,6 +138,7 @@ func newS3ObjectStore(config S3Config) (*s3ObjectStore, error) {
 		awsconfig.WithRegion(config.Region),
 		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(config.AccessKeyID, config.SecretAccessKey, "")),
 		awsconfig.WithRequestChecksumCalculation(aws.RequestChecksumCalculationWhenRequired),
+		awsconfig.WithResponseChecksumValidation(aws.ResponseChecksumValidationWhenRequired),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("configure S3 storage: %w", err)
@@ -209,6 +226,112 @@ func (store *s3ObjectStore) Delete(key string) error {
 		Bucket: aws.String(store.bucket),
 		Key:    aws.String(store.objectKey(key)),
 	})
+	return err
+}
+
+func (store *s3ObjectStore) PutStream(ctx context.Context, key string, body io.ReadSeeker, size int64, contentType string) error {
+	_, err := store.client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:        aws.String(store.bucket),
+		Key:           aws.String(store.objectKey(key)),
+		Body:          body,
+		ContentLength: aws.Int64(size),
+		ContentType:   aws.String(contentType),
+	})
+	var apiError smithy.APIError
+	if errors.As(err, &apiError) && apiError.ErrorCode() == "EntityTooLarge" {
+		return fmt.Errorf("%w: %v", errObjectTooLarge, err)
+	}
+	return err
+}
+
+// OpenStream starts the download immediately so a missing object is reported
+// before any response headers are written.
+func (store *s3ObjectStore) OpenStream(ctx context.Context, key string, size int64) (io.ReadSeekCloser, error) {
+	reader := &s3StreamReader{ctx: ctx, store: store, key: key, size: size}
+	if err := reader.open(); err != nil {
+		return nil, err
+	}
+	return reader, nil
+}
+
+// s3StreamReader adapts GetObject to io.ReadSeeker for http.ServeContent. A
+// seek only records the position; the next read reopens the object with a
+// Range request when the position no longer matches the open body.
+type s3StreamReader struct {
+	ctx        context.Context
+	store      *s3ObjectStore
+	key        string
+	size       int64
+	offset     int64
+	body       io.ReadCloser
+	bodyOffset int64
+}
+
+func (reader *s3StreamReader) open() error {
+	input := &s3.GetObjectInput{
+		Bucket: aws.String(reader.store.bucket),
+		Key:    aws.String(reader.store.objectKey(reader.key)),
+	}
+	if reader.offset > 0 {
+		input.Range = aws.String(fmt.Sprintf("bytes=%d-", reader.offset))
+	}
+	result, err := reader.store.client.GetObject(reader.ctx, input)
+	if err != nil {
+		if s3NotFound(err) {
+			return os.ErrNotExist
+		}
+		return err
+	}
+	reader.body = result.Body
+	reader.bodyOffset = reader.offset
+	return nil
+}
+
+func (reader *s3StreamReader) Read(buffer []byte) (int, error) {
+	if reader.offset >= reader.size {
+		return 0, io.EOF
+	}
+	if reader.body != nil && reader.bodyOffset != reader.offset {
+		reader.body.Close()
+		reader.body = nil
+	}
+	if reader.body == nil {
+		if err := reader.open(); err != nil {
+			return 0, err
+		}
+	}
+	count, err := reader.body.Read(buffer)
+	reader.offset += int64(count)
+	reader.bodyOffset = reader.offset
+	if errors.Is(err, io.EOF) && reader.offset < reader.size {
+		err = io.ErrUnexpectedEOF
+	}
+	return count, err
+}
+
+func (reader *s3StreamReader) Seek(offset int64, whence int) (int64, error) {
+	switch whence {
+	case io.SeekStart:
+	case io.SeekCurrent:
+		offset += reader.offset
+	case io.SeekEnd:
+		offset += reader.size
+	default:
+		return 0, errors.New("invalid seek whence")
+	}
+	if offset < 0 {
+		return 0, errors.New("negative seek position")
+	}
+	reader.offset = offset
+	return offset, nil
+}
+
+func (reader *s3StreamReader) Close() error {
+	if reader.body == nil {
+		return nil
+	}
+	err := reader.body.Close()
+	reader.body = nil
 	return err
 }
 

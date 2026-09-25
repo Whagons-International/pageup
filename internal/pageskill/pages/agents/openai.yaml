@@ -1,4 +1,4 @@
 interface:
   display_name: "Pages"
-  short_description: "Publish polished HTML pages and mini-sites with Pageup"
+  short_description: "Publish HTML pages and mini-sites, and share files, with Pageup"
   default_prompt: "Use $pages to create and publish a polished HTML project summary."
