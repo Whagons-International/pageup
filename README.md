@@ -98,7 +98,9 @@ Any file that is not HTML can be shared: screenshots, images, PDFs, logs, data e
 
 Shared files live at `/f/<uuid>/<name>`. The UUID identifies the file; a missing or outdated name redirects to the current one. Images, PDFs, audio, video, plain text, Markdown, CSV, and JSON are served inline, and every other type, including HTML and SVG, is served as an attachment. `?download` forces an attachment. Responses support Range requests, so media can seek, and they use `Cache-Control: no-cache` with a SHA-256 ETag, so updates appear immediately while unchanged files revalidate cheaply. File responses allow cross-origin reads because they are already public to anyone with the URL.
 
-Updates keep the file name unless `--name` is given. The creator key or an admin can update or delete a file. Uploads stream in both directions: the CLI signs the file's SHA-256 in a header, the server authenticates the request before reading the body, verifies the hash while spooling to a temporary file, and then streams it to storage. Neither side holds the file in memory. Each file is capped by `PAGEUP_MAX_FILE_BYTES` (100 MiB by default). The storage backend can impose a lower limit; tg-s3 accepts 20 MB per object unless its large-file processor is configured, and the CLI reports either limit as a 413 error.
+Updates keep the file name unless `--name` is given. The creator key or an admin can update or delete a file. Uploads stream in both directions: the CLI signs the file's SHA-256 in a header, the server authenticates the request before reading the body, verifies the hash while spooling to a temporary file, and then streams it to storage. Neither side holds the file in memory. Each file is capped by `PAGEUP_MAX_FILE_BYTES` (100 MiB by default), and the CLI reports the limit in its 413 error.
+
+With S3 storage, Pageup splits each file into 16 MiB objects (`PAGEUP_FILE_CHUNK_BYTES`) because tg-s3 stores every object as one Telegram message, and the hosted Bot API only returns files up to 20 MB. Chunks upload three at a time and are stitched back together as a download streams, including for Range requests. Each chunk is one Telegram message, so very large limits run into Telegram's per-chat rate limits; the 100 MiB default needs seven. Local disk storage keeps each file whole.
 
 The `pageup-whagons` executable keeps credentials under the platform's `pageup-whagons` application config directory (`~/.config/pageup-whagons/config.json` on Linux) and uses mode `0600` where supported. This is intentionally separate from the legacy Gabriel Pageup config. `PAGEUP_CONFIG` selects another config file. Headless agents can use `PAGEUP_PRIVATE_KEY` with `PAGEUP_ENDPOINT` instead; treat the private-key value as a secret.
 
@@ -130,6 +132,7 @@ Server settings:
 | `PAGEUP_BOOTSTRAP_KEYS` | required on first boot | JSON array containing at least one admin public key |
 | `PAGEUP_MAX_PAGE_BYTES` | `5242880` | Maximum HTML bytes per page or site |
 | `PAGEUP_MAX_FILE_BYTES` | `104857600` | Maximum bytes per shared file |
+| `PAGEUP_FILE_CHUNK_BYTES` | `16777216` with S3, unsplit on disk | Maximum bytes per stored object for shared files |
 | `PAGEUP_LISTEN_ADDR` | `:8080` | HTTP listen address |
 | `PAGEUP_WHAGONS_AUTH_URL` | Gonvex production endpoint | Authenticated developer-allowlist check |
 | `PAGEUP_WHAGONS_PROJECT_ID` | production Whagons project UUID | Gonvex project header; distinct from the Firebase project ID |

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -23,8 +25,14 @@ import (
 
 const (
 	defaultMaxFileBytes int64 = 100 << 20
-	fileMetadataVersion       = 1
-	maxFileNameBytes          = 255
+	// defaultS3FileChunkBytes keeps each stored object under tg-s3's 20 MB
+	// Telegram limit, with room for server-side encryption overhead.
+	defaultS3FileChunkBytes int64 = 16 << 20
+	// fileChunkUploads bounds concurrent chunk writes so large uploads finish
+	// within proxy timeouts without flooding the Telegram-backed store.
+	fileChunkUploads    = 3
+	fileMetadataVersion = 1
+	maxFileNameBytes    = 255
 	// fileTransferTimeout replaces the server's short read and write timeouts
 	// once a file upload is authenticated or a download begins.
 	fileTransferTimeout = 30 * time.Minute
@@ -35,17 +43,20 @@ const (
 var errObjectTooLarge = errors.New("object exceeds the storage size limit")
 
 type fileMetadata struct {
-	Version     int       `json:"version"`
-	ID          string    `json:"id"`
-	OwnerKeyID  string    `json:"owner_key_id"`
-	Name        string    `json:"name"`
-	ContentType string    `json:"content_type"`
-	Size        int64     `json:"size"`
-	SHA256      string    `json:"sha256"`
-	Blob        string    `json:"blob"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
-	Revision    uint64    `json:"revision"`
+	Version     int    `json:"version"`
+	ID          string `json:"id"`
+	OwnerKeyID  string `json:"owner_key_id"`
+	Name        string `json:"name"`
+	ContentType string `json:"content_type"`
+	Size        int64  `json:"size"`
+	SHA256      string `json:"sha256"`
+	Blob        string `json:"blob"`
+	// ChunkBytes is the size of each stored chunk; zero means the content is
+	// one object.
+	ChunkBytes int64     `json:"chunk_bytes,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+	Revision   uint64    `json:"revision"`
 }
 
 // spooledUpload is an authenticated request body that matched its signed hash,
@@ -159,16 +170,17 @@ func (server *Server) handleFileCreate(writer http.ResponseWriter, request *http
 		Size:        upload.size,
 		SHA256:      upload.sha256,
 		Blob:        nonce,
+		ChunkBytes:  server.config.FileChunkBytes,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 		Revision:    1,
 	}
-	if !server.storeFileBlob(writer, request, metadata, upload) {
+	if !server.storeFileContent(writer, request, metadata, upload) {
 		return
 	}
 	created, err := server.writeFileMetadata(metadata, true)
 	if err != nil || !created {
-		server.store.Delete(fileBlobKey(metadata.ID, metadata.Blob))
+		server.deleteFileContent(metadata)
 		if err == nil || errors.Is(err, errContentConflict) {
 			writeError(writer, http.StatusConflict, "file id already exists")
 			return
@@ -211,17 +223,17 @@ func (server *Server) handleFileUpdate(writer http.ResponseWriter, request *http
 		Size:        upload.size,
 		SHA256:      upload.sha256,
 		Blob:        nonce,
+		ChunkBytes:  server.config.FileChunkBytes,
 	}
-	if !server.storeFileBlob(writer, request, replacement, upload) {
+	if !server.storeFileContent(writer, request, replacement, upload) {
 		return
 	}
-	newBlobKey := fileBlobKey(id, nonce)
 
 	server.files.Lock()
 	previous, err := server.readFileMetadata(id)
 	if !server.allowFileChange(writer, id, key, previous, err) {
 		server.files.Unlock()
-		server.store.Delete(newBlobKey)
+		server.deleteFileContent(replacement)
 		return
 	}
 	updated := previous
@@ -230,19 +242,18 @@ func (server *Server) handleFileUpdate(writer http.ResponseWriter, request *http
 	updated.Size = replacement.Size
 	updated.SHA256 = replacement.SHA256
 	updated.Blob = replacement.Blob
+	updated.ChunkBytes = replacement.ChunkBytes
 	updated.UpdatedAt = server.config.Now().UTC()
 	updated.Revision++
 	_, err = server.writeFileMetadata(updated, false)
 	server.files.Unlock()
 	if err != nil {
-		server.store.Delete(newBlobKey)
+		server.deleteFileContent(replacement)
 		server.config.Logger.Error("write file metadata", "file_id", id, "error", err)
 		writeError(writer, http.StatusInternalServerError, "could not update file")
 		return
 	}
-	if err := server.store.Delete(fileBlobKey(id, previous.Blob)); err != nil {
-		server.config.Logger.Warn("remove replaced file content", "file_id", id, "error", err)
-	}
+	server.deleteFileContent(previous)
 	response := server.fileResponse(request, updated)
 	response.Updated = true
 	writeJSON(writer, http.StatusOK, response)
@@ -266,9 +277,7 @@ func (server *Server) handleFileDelete(writer http.ResponseWriter, request *http
 		writeError(writer, http.StatusInternalServerError, "could not delete file")
 		return
 	}
-	if err := server.store.Delete(fileBlobKey(id, metadata.Blob)); err != nil {
-		server.config.Logger.Warn("remove deleted file content", "file_id", id, "error", err)
-	}
+	server.deleteFileContent(metadata)
 	response := server.fileResponse(request, metadata)
 	response.Deleted = true
 	writeJSON(writer, http.StatusOK, response)
@@ -302,12 +311,12 @@ func (server *Server) handleFile(writer http.ResponseWriter, request *http.Reque
 		http.Redirect(writer, request, location, http.StatusTemporaryRedirect)
 		return
 	}
-	content, err := server.store.OpenStream(request.Context(), fileBlobKey(id, metadata.Blob), metadata.Size)
+	content, err := server.openFileContent(request.Context(), metadata)
 	if errors.Is(err, os.ErrNotExist) {
 		// An update may have replaced the content after metadata was read.
 		metadata, err = server.readFileMetadata(id)
 		if err == nil {
-			content, err = server.store.OpenStream(request.Context(), fileBlobKey(id, metadata.Blob), metadata.Size)
+			content, err = server.openFileContent(request.Context(), metadata)
 		}
 	}
 	if errors.Is(err, os.ErrNotExist) {
@@ -397,11 +406,36 @@ func (server *Server) spoolUpload(writer http.ResponseWriter, request *http.Requ
 	return upload, true
 }
 
-func (server *Server) storeFileBlob(writer http.ResponseWriter, request *http.Request, metadata fileMetadata, upload spooledUpload) bool {
-	err := server.store.PutStream(request.Context(), fileBlobKey(metadata.ID, metadata.Blob), upload.file, upload.size, metadata.ContentType)
+// storeFileContent writes a spooled upload as one object or as fixed-size
+// chunks, removing any stored chunks if a write fails.
+func (server *Server) storeFileContent(writer http.ResponseWriter, request *http.Request, metadata fileMetadata, upload spooledUpload) bool {
+	ctx, cancel := context.WithCancel(request.Context())
+	defer cancel()
+	keys := fileContentKeys(metadata)
+	errs := make([]error, len(keys))
+	slots := make(chan struct{}, fileChunkUploads)
+	var wait sync.WaitGroup
+	for index, key := range keys {
+		slots <- struct{}{}
+		wait.Add(1)
+		go func() {
+			defer func() {
+				<-slots
+				wait.Done()
+			}()
+			offset, length := fileChunkSpan(metadata, index)
+			content := io.NewSectionReader(upload.file, offset, length)
+			if errs[index] = server.store.PutStream(ctx, key, content, length, metadata.ContentType); errs[index] != nil {
+				cancel()
+			}
+		}()
+	}
+	wait.Wait()
+	err := errors.Join(errs...)
 	if err == nil {
 		return true
 	}
+	server.deleteFileContent(metadata)
 	if errors.Is(err, errObjectTooLarge) {
 		writeError(writer, http.StatusRequestEntityTooLarge, "file exceeds the storage backend's size limit")
 		return false
@@ -438,7 +472,7 @@ func (server *Server) readFileMetadata(id string) (fileMetadata, error) {
 		return fileMetadata{}, fmt.Errorf("parse file metadata: %w", err)
 	}
 	if metadata.Version != fileMetadataVersion || metadata.ID != id || metadata.OwnerKeyID == "" || !validFileName(metadata.Name) ||
-		metadata.ContentType == "" || metadata.Size < 0 || !validSHA256(metadata.SHA256) || !protocol.IsUUIDv7(metadata.Blob) ||
+		metadata.ContentType == "" || metadata.Size < 0 || !validSHA256(metadata.SHA256) || !protocol.IsUUIDv7(metadata.Blob) || metadata.ChunkBytes < 0 ||
 		metadata.CreatedAt.IsZero() || metadata.UpdatedAt.IsZero() || metadata.Revision == 0 {
 		return fileMetadata{}, errors.New("invalid file metadata")
 	}
@@ -463,6 +497,130 @@ func (server *Server) fileResponse(request *http.Request, metadata fileMetadata)
 		SHA256:      metadata.SHA256,
 		Revision:    metadata.Revision,
 	}
+}
+
+func (server *Server) openFileContent(ctx context.Context, metadata fileMetadata) (io.ReadSeekCloser, error) {
+	if metadata.ChunkBytes <= 0 {
+		return server.store.OpenStream(ctx, fileBlobKey(metadata.ID, metadata.Blob), metadata.Size)
+	}
+	return &chunkedReader{ctx: ctx, store: server.store, metadata: metadata, keys: fileContentKeys(metadata)}, nil
+}
+
+// deleteFileContent removes every stored object of one revision. Failures are
+// only logged because no metadata references the content any longer.
+func (server *Server) deleteFileContent(metadata fileMetadata) {
+	for _, key := range fileContentKeys(metadata) {
+		if err := server.store.Delete(key); err != nil {
+			server.config.Logger.Warn("remove file content", "file_id", metadata.ID, "key", key, "error", err)
+		}
+	}
+}
+
+// chunkedReader presents content stored as fixed-size chunks as one
+// io.ReadSeekCloser for http.ServeContent, opening chunks as reads reach them.
+type chunkedReader struct {
+	ctx        context.Context
+	store      objectStore
+	metadata   fileMetadata
+	keys       []string
+	offset     int64
+	chunk      io.ReadSeekCloser
+	chunkIndex int
+	chunkPos   int64
+}
+
+func (reader *chunkedReader) Read(buffer []byte) (int, error) {
+	if len(buffer) == 0 {
+		return 0, nil
+	}
+	for {
+		if reader.offset >= reader.metadata.Size {
+			return 0, io.EOF
+		}
+		index := int(reader.offset / reader.metadata.ChunkBytes)
+		start, length := fileChunkSpan(reader.metadata, index)
+		if reader.chunk != nil && reader.chunkIndex != index {
+			reader.chunk.Close()
+			reader.chunk = nil
+		}
+		if reader.chunk == nil {
+			chunk, err := reader.store.OpenStream(reader.ctx, reader.keys[index], length)
+			if err != nil {
+				return 0, err
+			}
+			reader.chunk, reader.chunkIndex, reader.chunkPos = chunk, index, 0
+		}
+		if within := reader.offset - start; reader.chunkPos != within {
+			if _, err := reader.chunk.Seek(within, io.SeekStart); err != nil {
+				return 0, err
+			}
+			reader.chunkPos = within
+		}
+		limited := buffer
+		if remaining := length - reader.chunkPos; int64(len(limited)) > remaining {
+			limited = limited[:remaining]
+		}
+		count, err := reader.chunk.Read(limited)
+		reader.offset += int64(count)
+		reader.chunkPos += int64(count)
+		if errors.Is(err, io.EOF) {
+			if reader.chunkPos < length {
+				return count, io.ErrUnexpectedEOF
+			}
+			err = nil
+		}
+		if count > 0 || err != nil {
+			return count, err
+		}
+	}
+}
+
+func (reader *chunkedReader) Seek(offset int64, whence int) (int64, error) {
+	switch whence {
+	case io.SeekStart:
+	case io.SeekCurrent:
+		offset += reader.offset
+	case io.SeekEnd:
+		offset += reader.metadata.Size
+	default:
+		return 0, errors.New("invalid seek whence")
+	}
+	if offset < 0 {
+		return 0, errors.New("negative seek position")
+	}
+	reader.offset = offset
+	return offset, nil
+}
+
+func (reader *chunkedReader) Close() error {
+	if reader.chunk == nil {
+		return nil
+	}
+	err := reader.chunk.Close()
+	reader.chunk = nil
+	return err
+}
+
+// fileContentKeys lists the stored objects of one revision in order.
+func fileContentKeys(metadata fileMetadata) []string {
+	if metadata.ChunkBytes <= 0 {
+		return []string{fileBlobKey(metadata.ID, metadata.Blob)}
+	}
+	count := max(1, (metadata.Size+metadata.ChunkBytes-1)/metadata.ChunkBytes)
+	keys := make([]string, count)
+	for index := range keys {
+		keys[index] = fmt.Sprintf("files/%s.%s.%d.blob", metadata.ID, metadata.Blob, index)
+	}
+	return keys
+}
+
+// fileChunkSpan returns the byte offset and length of one stored object.
+func fileChunkSpan(metadata fileMetadata, index int) (int64, int64) {
+	if metadata.ChunkBytes <= 0 {
+		return 0, metadata.Size
+	}
+	offset := int64(index) * metadata.ChunkBytes
+	return offset, min(metadata.ChunkBytes, metadata.Size-offset)
 }
 
 func fileMetadataKey(id string) string {

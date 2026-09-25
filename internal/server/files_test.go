@@ -501,7 +501,7 @@ func (fake *fakeS3) keys() []string {
 
 func TestFilesStreamThroughS3Storage(t *testing.T) {
 	fake, store := newFakeS3(t)
-	environment := newTestEnvironmentWithConfig(t, Config{storage: store})
+	environment := newTestEnvironmentWithConfig(t, Config{storage: store, FileChunkBytes: 4096})
 	defer environment.close()
 	client, err := pageclient.New(environment.config, "test")
 	if err != nil {
@@ -521,6 +521,19 @@ func TestFilesStreamThroughS3Storage(t *testing.T) {
 	response, body = getFile(t, created.URL, http.Header{"Range": {"bytes=10-14"}})
 	if response.StatusCode != http.StatusPartialContent || body != "01234" {
 		t.Fatalf("bounded range = %d %q", response.StatusCode, body)
+	}
+	response, body = getFile(t, created.URL, http.Header{"Range": {"bytes=4090-4105"}})
+	if response.StatusCode != http.StatusPartialContent || body != contents[4090:4106] {
+		t.Fatalf("cross-chunk range = %d %q", response.StatusCode, body)
+	}
+	chunkKeys := 0
+	for _, key := range fake.keys() {
+		if strings.HasPrefix(key, "files/"+created.ID+"."+created.ID+".") {
+			chunkKeys++
+		}
+	}
+	if chunkKeys != 3 {
+		t.Fatalf("S3 chunk keys = %v", fake.keys())
 	}
 
 	if _, err := client.UpdateFile(context.Background(), created.ID, "", strings.NewReader("replaced")); err != nil {
@@ -591,4 +604,89 @@ func (reader *countingReader) Read(buffer []byte) (int, error) {
 
 func (reader *countingReader) Seek(offset int64, whence int) (int64, error) {
 	return reader.reader.Seek(offset, whence)
+}
+
+func TestChunkedFilesReassembleAndCleanUp(t *testing.T) {
+	environment := newTestEnvironmentWithConfig(t, Config{FileChunkBytes: 4})
+	defer environment.close()
+	client, err := pageclient.New(environment.config, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	contents := "0123456789abcdef!"
+	created := uploadTestFile(t, client, "chunks.txt", contents)
+	if entries := storedFileEntries(t, environment.dataDir); len(entries) != 6 {
+		t.Fatalf("stored entries = %v", entries)
+	}
+	response, body := getFile(t, created.URL, nil)
+	if response.StatusCode != http.StatusOK || body != contents || response.Header.Get("Content-Length") != "17" {
+		t.Fatalf("GET = %d %q", response.StatusCode, body)
+	}
+	for header, expected := range map[string]string{
+		"bytes=3-9":   contents[3:10],
+		"bytes=8-11":  contents[8:12],
+		"bytes=16-":   "!",
+		"bytes=-6":    contents[11:],
+		"bytes=0-0":   "0",
+		"bytes=5-100": contents[5:],
+	} {
+		response, body := getFile(t, created.URL, http.Header{"Range": {header}})
+		if response.StatusCode != http.StatusPartialContent || body != expected {
+			t.Fatalf("Range %s = %d %q, want %q", header, response.StatusCode, body, expected)
+		}
+	}
+	response, body = getFile(t, created.URL, http.Header{"Range": {"bytes=0-1,4-5"}})
+	if response.StatusCode != http.StatusPartialContent || !strings.Contains(body, "01") || !strings.Contains(body, "45") {
+		t.Fatalf("multipart range = %d %q", response.StatusCode, body)
+	}
+
+	if _, err := client.UpdateFile(context.Background(), created.ID, "", strings.NewReader("tiny")); err != nil {
+		t.Fatal(err)
+	}
+	if _, body := getFile(t, created.URL, nil); body != "tiny" {
+		t.Fatalf("updated body = %q", body)
+	}
+	if entries := storedFileEntries(t, environment.dataDir); len(entries) != 2 {
+		t.Fatalf("entries after update = %v", entries)
+	}
+	empty := uploadTestFile(t, client, "empty.txt", "")
+	if response, body := getFile(t, empty.URL, nil); response.StatusCode != http.StatusOK || body != "" {
+		t.Fatalf("empty chunked file = %d %q", response.StatusCode, body)
+	}
+	for _, id := range []string{created.ID, empty.ID} {
+		if _, err := client.DeleteFile(context.Background(), id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if entries := storedFileEntries(t, environment.dataDir); len(entries) != 0 {
+		t.Fatalf("entries after delete = %v", entries)
+	}
+}
+
+func TestS3StorageDefaultsToChunkedFiles(t *testing.T) {
+	fake := &fakeS3{objects: make(map[string][]byte)}
+	endpoint := httptest.NewServer(fake)
+	defer endpoint.Close()
+	publicKey, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := New(Config{
+		BootstrapKeys: `[{"name":"admin","public_key":"` + protocol.EncodePublicKey(publicKey) + `","role":"admin"}]`,
+		S3:            S3Config{Endpoint: endpoint.URL, Bucket: "pageup", AccessKeyID: "access", SecretAccessKey: "secret"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if service.config.FileChunkBytes != defaultS3FileChunkBytes {
+		t.Fatalf("S3 chunk size = %d", service.config.FileChunkBytes)
+	}
+	disk, err := New(Config{DataDir: t.TempDir(), BootstrapKeys: service.config.BootstrapKeys})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disk.config.FileChunkBytes != 0 {
+		t.Fatalf("filesystem chunk size = %d", disk.config.FileChunkBytes)
+	}
 }

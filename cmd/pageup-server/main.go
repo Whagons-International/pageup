@@ -36,15 +36,25 @@ func main() {
 		}
 		maxFileBytes = parsed
 	}
+	var fileChunkBytes int64
+	if value := os.Getenv("PAGEUP_FILE_CHUNK_BYTES"); value != "" {
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || parsed <= 0 {
+			logger.Error("invalid PAGEUP_FILE_CHUNK_BYTES", "value", value)
+			os.Exit(1)
+		}
+		fileChunkBytes = parsed
+	}
 	service, err := pageupserver.New(pageupserver.Config{
-		DataDir:       envOr("PAGEUP_DATA_DIR", "/data"),
-		PublicURL:     os.Getenv("PAGEUP_PUBLIC_URL"),
-		DownloadsDir:  envOr("PAGEUP_DOWNLOADS_DIR", "/app/downloads"),
-		BootstrapKeys: os.Getenv("PAGEUP_BOOTSTRAP_KEYS"),
-		MaxPageBytes:  maxPageBytes,
-		MaxFileBytes:  maxFileBytes,
-		Version:       version,
-		Logger:        logger,
+		DataDir:        envOr("PAGEUP_DATA_DIR", "/data"),
+		PublicURL:      os.Getenv("PAGEUP_PUBLIC_URL"),
+		DownloadsDir:   envOr("PAGEUP_DOWNLOADS_DIR", "/app/downloads"),
+		BootstrapKeys:  os.Getenv("PAGEUP_BOOTSTRAP_KEYS"),
+		MaxPageBytes:   maxPageBytes,
+		MaxFileBytes:   maxFileBytes,
+		FileChunkBytes: fileChunkBytes,
+		Version:        version,
+		Logger:         logger,
 		Authorizer: pageupserver.NewWhagonsDeveloperAuthorizer(
 			envOr("PAGEUP_WHAGONS_AUTH_URL", "https://gonvex.whagons.com/api/internal/pageup/authorize"),
 			envOr("PAGEUP_WHAGONS_PROJECT_ID", "01f18dfa-673a-618d-913c-36ebad0f0bd1"),

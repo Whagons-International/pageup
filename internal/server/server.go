@@ -34,12 +34,15 @@ type Config struct {
 	BootstrapKeys string
 	MaxPageBytes  int64
 	MaxFileBytes  int64
-	Version       string
-	Logger        *slog.Logger
-	Now           func() time.Time
-	Authorizer    DeveloperAuthorizer
-	S3            S3Config
-	storage       objectStore
+	// FileChunkBytes splits stored files into objects of at most this size.
+	// Zero selects the backend default: 16 MiB on S3, unsplit on disk.
+	FileChunkBytes int64
+	Version        string
+	Logger         *slog.Logger
+	Now            func() time.Time
+	Authorizer     DeveloperAuthorizer
+	S3             S3Config
+	storage        objectStore
 }
 
 type Server struct {
@@ -83,6 +86,9 @@ func New(config Config) (*Server, error) {
 		var err error
 		if strings.TrimSpace(config.S3.Endpoint) != "" {
 			store, err = newS3ObjectStore(config.S3)
+			if config.FileChunkBytes == 0 {
+				config.FileChunkBytes = defaultS3FileChunkBytes
+			}
 		} else {
 			store, err = newFilesystemObjectStore(config.DataDir)
 		}

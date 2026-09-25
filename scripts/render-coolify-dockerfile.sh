@@ -4,7 +4,9 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 version=${1:-dev}
 
-archive=$(
+archive=$(mktemp)
+trap 'rm -f "$archive"' EXIT
+(
   cd "$root"
   tar \
     --exclude=.git \
@@ -12,14 +14,18 @@ archive=$(
     --exclude=.deploy \
     --exclude=bin \
     --exclude='*.out' \
-    -czf - . | base64 -w 0
-)
+    -czf - . | base64 -w 60000
+) > "$archive"
 
 printf '%s\n' \
   '# syntax=docker/dockerfile:1' \
   'FROM golang:1.26.5-alpine AS build' \
-  'WORKDIR /src' \
-  "RUN printf '%s' '$archive' | base64 -d | tar -xzf - -C /src" \
+  'WORKDIR /src'
+# Docker rejects Dockerfile lines over 64 KiB, so the source archive is
+# appended in bounded lines rather than passed as one RUN argument.
+sed "s|.*|RUN printf '%s' '&' >> /tmp/source.b64|" "$archive"
+printf '%s\n' \
+  'RUN base64 -d /tmp/source.b64 | tar -xzf - -C /src && rm /tmp/source.b64' \
   'RUN mkdir -p /out/downloads \' \
   " && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w -X main.version=$version' -o /out/downloads/pageup-linux-amd64 ./cmd/pageup \\" \
   " && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags='-s -w -X main.version=$version' -o /out/downloads/pageup-linux-arm64 ./cmd/pageup \\" \
